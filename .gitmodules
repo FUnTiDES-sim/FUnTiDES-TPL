@@ -2,3 +2,7 @@
 	path = external/kokkos
 	url = https://github.com/kokkos/kokkos
 	branch = release-candidate-4.7.02
+[submodule "external/adios2"]
+	path = external/adios2
+	url = https://github.com/ornladios/ADIOS2
+	branch = release_211
