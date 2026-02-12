@@ -7,8 +7,8 @@ export NB_MAKE_PROCS=12
 export CMAKE_PREFIX_INSTALL=""
 
 # path parameters
-export INSTALL_DIR="/home/alexis/install"
-export BUILD_DIR="/home/alexis/build"
+export INSTALL_DIR="$HOME/test/install"
+export BUILD_DIR="$HOME/test/build"
 
 # dependencies parameters
 export KOKKOS_DIR=$SCRIPT_DIR/external/kokkos
