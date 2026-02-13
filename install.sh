@@ -21,6 +21,7 @@ BUILD_MPI="yes"
 BUILD_PYTHON="yes"
 BUILD_TESTS="yes"
 NUM_JOBS=8
+FORCE_REBUILD="no"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERNAL_DIR="${SCRIPT_DIR}/external"
 BUILD_DIR="${SCRIPT_DIR}/build"
@@ -55,6 +56,38 @@ check_command() {
     return 0
 }
 
+# Check if a component is already installed
+is_installed() {
+    local component=$1
+    local check_file=$2
+
+    if [ "$FORCE_REBUILD" = "yes" ]; then
+        return 1  # Force rebuild, so not "installed"
+    fi
+
+    if [ -f "${INSTALL_PREFIX}/${check_file}" ] || [ -d "${INSTALL_PREFIX}/${check_file}" ]; then
+        return 0  # Already installed
+    fi
+    return 1  # Not installed
+}
+
+# Ask user if they want to rebuild an already-installed component
+ask_rebuild() {
+    local component=$1
+
+    if [ "$FORCE_REBUILD" = "yes" ]; then
+        return 0  # Rebuild
+    fi
+
+    print_warning "${component} appears to be already installed"
+    read -p "Rebuild ${component}? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        return 0  # Rebuild
+    fi
+    return 1  # Skip
+}
+
 # ==============================================================================
 # Parse arguments
 # ==============================================================================
@@ -73,6 +106,7 @@ Options:
   --skip-python          Skip Python dependencies (pykokkos)
   --skip-tests           Skip test libraries (GTest, GBench)
   --jobs=N               Number of parallel jobs (default: 8)
+  --force                Force rebuild of all components
   -h, --help             Show this help message
 
 Examples:
@@ -111,6 +145,9 @@ for arg in "$@"; do
             ;;
         --jobs=*)
             NUM_JOBS="${arg#*=}"
+            ;;
+        --force)
+            FORCE_REBUILD="yes"
             ;;
         -h|--help)
             show_help
@@ -185,6 +222,16 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     check_command python3 || { print_error "python3 required for pykokkos"; exit 1; }
     PYTHON_EXEC=$(which python3)
     print_info "Using Python: $PYTHON_EXEC"
+
+    # Check for pip
+    if ! ${PYTHON_EXEC} -m pip --version &> /dev/null; then
+        print_error "pip is not available for Python 3"
+        print_error "Install with: sudo apt-get install python3-pip (Ubuntu/Debian)"
+        print_error "           or: sudo yum install python3-pip (RHEL/CentOS)"
+        exit 1
+    fi
+
+    print_info "pip is available"
 fi
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
@@ -199,12 +246,51 @@ fi
 
 print_header "Checking Submodules"
 
-if [ ! -d "${EXTERNAL_DIR}/kokkos/.git" ]; then
-    print_warning "Submodules not initialized. Initializing now..."
-    git submodule update --init --recursive
+# Function to check if a submodule is properly initialized
+check_submodule() {
+    local name=$1
+    local path=$2
+    local check_file=$3
+
+    if [ ! -f "${path}/${check_file}" ]; then
+        print_error "Submodule '${name}' is not properly initialized"
+        print_error "Missing file: ${path}/${check_file}"
+        print_info "Initializing ${name} submodule..."
+        git submodule update --init --recursive "${path}" || {
+            print_error "Failed to initialize ${name} submodule"
+            print_error "Try manually: git submodule update --init --recursive ${path}"
+            exit 1
+        }
+
+        # Check again after initialization
+        if [ ! -f "${path}/${check_file}" ]; then
+            print_error "${name} submodule still incomplete after initialization"
+            exit 1
+        fi
+    fi
+    print_info "${name} submodule OK"
+}
+
+# Check required submodules
+check_submodule "Kokkos" "${EXTERNAL_DIR}/kokkos" "CMakeLists.txt"
+
+if [ "$BUILD_MPI" = "yes" ]; then
+    check_submodule "Open MPI" "${EXTERNAL_DIR}/openmpi" "autogen.pl"
 fi
 
-print_info "All submodules ready"
+if [ "$BUILD_PYTHON" = "yes" ]; then
+    check_submodule "pybind11" "${EXTERNAL_DIR}/pybind11" "CMakeLists.txt"
+    check_submodule "pykokkos" "${EXTERNAL_DIR}/pykokkos" "setup.py"
+fi
+
+check_submodule "ADIOS2" "${EXTERNAL_DIR}/adios2" "CMakeLists.txt"
+
+if [ "$BUILD_TESTS" = "yes" ]; then
+    check_submodule "GoogleTest" "${EXTERNAL_DIR}/googletest" "CMakeLists.txt"
+    check_submodule "Google Benchmark" "${EXTERNAL_DIR}/benchmark" "CMakeLists.txt"
+fi
+
+print_info "All required submodules are properly initialized"
 
 # ==============================================================================
 # Create build directories
@@ -224,6 +310,22 @@ BUILD_DIR=$(cd "${BUILD_DIR}" && pwd)
 if [ "$BUILD_MPI" = "yes" ]; then
     print_header "Building Open MPI"
 
+    # Check if already installed
+    if is_installed "Open MPI" "bin/mpirun"; then
+        print_info "Open MPI already installed at ${INSTALL_PREFIX}/bin/mpirun"
+        if ! ask_rebuild "Open MPI"; then
+            print_info "Skipping Open MPI build"
+            # Add to PATH for subsequent builds
+            export PATH="${INSTALL_PREFIX}/bin:$PATH"
+            export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH"
+        else
+            # Clean build directory before rebuild
+            rm -rf "${BUILD_DIR}/openmpi"
+        fi
+    fi
+
+    if ! is_installed "Open MPI" "bin/mpirun" || ask_rebuild "Open MPI" 2>/dev/null; then
+
     # Check if we need to run autogen (git checkout or no configure)
     # Submodules have .git as a file, not directory
     NEED_AUTOGEN=false
@@ -238,6 +340,20 @@ if [ "$BUILD_MPI" = "yes" ]; then
     if [ "$NEED_AUTOGEN" = "true" ]; then
         print_info "Generating configure script from git sources..."
         cd "${EXTERNAL_DIR}/openmpi"
+
+        # Check which branch/version we're on
+        if command -v git &> /dev/null && [ -e ".git" ]; then
+            OMPI_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+            OMPI_VERSION=$(cat VERSION 2>/dev/null | head -1 || echo "unknown")
+            print_info "Open MPI branch: ${OMPI_BRANCH}"
+            print_info "Open MPI version: ${OMPI_VERSION}"
+
+            # Warn if not on v4.1.x
+            if [[ ! "$OMPI_BRANCH" =~ ^v4\.1 ]] && [[ ! "$OMPI_VERSION" =~ ^4\.1 ]]; then
+                print_warning "Not on v4.1.x branch - you may encounter dependency issues"
+                print_warning "Recommended: git checkout v4.1.x"
+            fi
+        fi
 
         # Clean any previous autogen artifacts
         if [ -f "Makefile" ]; then
@@ -264,6 +380,20 @@ if [ "$BUILD_MPI" = "yes" ]; then
 
     CONFIGURE_ARGS="--prefix=${INSTALL_PREFIX}"
 
+    # Check Open MPI version to determine if we need internal PMIx
+    OMPI_VERSION=""
+    if [ -f "${EXTERNAL_DIR}/openmpi/VERSION" ]; then
+        OMPI_VERSION=$(cat "${EXTERNAL_DIR}/openmpi/VERSION" | head -1)
+        print_info "Detected Open MPI version: ${OMPI_VERSION}"
+    fi
+
+    # For v5.0+ we need internal PMIx to avoid system version conflicts
+    if [[ "$OMPI_VERSION" =~ ^5\. ]] || [[ "$OMPI_VERSION" =~ ^6\. ]]; then
+        print_warning "Open MPI v5.0+ detected - using internal PMIx/PRRTE"
+        print_warning "For better stability, consider: cd external/openmpi && git checkout v4.1.x"
+        CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-pmix=internal --with-prrte=internal"
+    fi
+
     if [ "$ENABLE_CUDA" = "yes" ]; then
         CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-cuda=${CUDA_PATH}"
         print_info "Enabling CUDA-aware MPI (--with-cuda=${CUDA_PATH})"
@@ -283,6 +413,7 @@ if [ "$BUILD_MPI" = "yes" ]; then
     export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH"
 
     print_info "Open MPI installed successfully"
+    fi  # End of rebuild check
 else
     print_info "Skipping Open MPI build (using system MPI or disabled)"
 fi
@@ -292,6 +423,18 @@ fi
 # ==============================================================================
 
 print_header "Building Kokkos"
+
+# Check if already installed
+if is_installed "Kokkos" "lib/cmake/Kokkos/KokkosConfig.cmake"; then
+    print_info "Kokkos already installed at ${INSTALL_PREFIX}"
+    if ! ask_rebuild "Kokkos"; then
+        print_info "Skipping Kokkos build"
+    else
+        rm -rf "${BUILD_DIR}/kokkos"
+    fi
+fi
+
+if ! is_installed "Kokkos" "lib/cmake/Kokkos/KokkosConfig.cmake" || ask_rebuild "Kokkos" 2>/dev/null; then
 
 KOKKOS_BUILD_DIR="${BUILD_DIR}/kokkos"
 mkdir -p "${KOKKOS_BUILD_DIR}"
@@ -326,6 +469,7 @@ print_info "Installing Kokkos..."
 cmake --install .
 
 print_info "Kokkos installed successfully"
+fi  # End of Kokkos rebuild check
 
 # ==============================================================================
 # Build pybind11
@@ -333,6 +477,18 @@ print_info "Kokkos installed successfully"
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pybind11"
+
+    # Check if already installed
+    if is_installed "pybind11" "lib/cmake/pybind11/pybind11Config.cmake"; then
+        print_info "pybind11 already installed"
+        if ! ask_rebuild "pybind11"; then
+            print_info "Skipping pybind11 build"
+        else
+            rm -rf "${BUILD_DIR}/pybind11"
+        fi
+    fi
+
+    if ! is_installed "pybind11" "lib/cmake/pybind11/pybind11Config.cmake" || ask_rebuild "pybind11" 2>/dev/null; then
 
     PYBIND11_BUILD_DIR="${BUILD_DIR}/pybind11"
     mkdir -p "${PYBIND11_BUILD_DIR}"
@@ -349,6 +505,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     cmake --install .
 
     print_info "pybind11 installed successfully"
+    fi  # End of pybind11 rebuild check
 fi
 
 # ==============================================================================
@@ -358,14 +515,84 @@ fi
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pykokkos"
 
+    # Install build dependencies first (system-wide or user, not to prefix)
+    print_info "Installing pykokkos build dependencies..."
+
+    # Try different methods to install dependencies
+    if ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja 2>/dev/null; then
+        print_info "Build dependencies installed with --break-system-packages"
+    elif ${PYTHON_EXEC} -m pip install --user scikit-build cmake ninja 2>/dev/null; then
+        print_info "Build dependencies installed to user directory"
+    else
+        print_warning "Could not install build dependencies automatically"
+        print_warning "You may need to install manually: pip install scikit-build cmake ninja"
+    fi
+
+    # Verify skbuild is available
+    if ! ${PYTHON_EXEC} -c "import skbuild" 2>/dev/null; then
+        print_error "scikit-build (skbuild) is not available for Python"
+        print_error "Please install manually:"
+        print_error "  python3 -m pip install --user scikit-build cmake ninja"
+        print_error "Or skip Python dependencies: ./install.sh --skip-python"
+        exit 1
+    fi
+
     cd "${EXTERNAL_DIR}/pykokkos"
 
     # Set environment for pykokkos build
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
-    export PYTHONPATH="${INSTALL_PREFIX}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:${PYTHONPATH}"
+    PYTHON_SITE_PACKAGES="${INSTALL_PREFIX}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+    export PYTHONPATH="${PYTHON_SITE_PACKAGES}:${PYTHONPATH}"
 
-    print_info "Installing pykokkos..."
-    ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --no-build-isolation .
+    # Set CUDA architecture for pykokkos-base's internal Kokkos build
+    if [ "$ENABLE_CUDA" = "yes" ]; then
+        # Convert comma-separated to array
+        IFS=',' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
+        # Use first architecture for pykokkos
+        FIRST_ARCH="${ARCH_ARRAY[0]}"
+
+        print_info "Setting CUDA architecture ${FIRST_ARCH} for pykokkos build"
+
+        # Map architecture number to Kokkos flag name
+        case "$FIRST_ARCH" in
+            70) KOKKOS_ARCH="VOLTA70" ;;
+            72) KOKKOS_ARCH="VOLTA72" ;;
+            75) KOKKOS_ARCH="TURING75" ;;
+            80) KOKKOS_ARCH="AMPERE80" ;;
+            86) KOKKOS_ARCH="AMPERE86" ;;
+            89) KOKKOS_ARCH="ADA89" ;;
+            90) KOKKOS_ARCH="HOPPER90" ;;
+            *) KOKKOS_ARCH="AMPERE80"; print_warning "Unknown CUDA arch ${FIRST_ARCH}, defaulting to AMPERE80" ;;
+        esac
+
+        # Set CMAKE arguments for pykokkos-base build
+        export CMAKE_ARGS="-DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_${KOKKOS_ARCH}=ON -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
+        print_info "CMAKE_ARGS=${CMAKE_ARGS}"
+    fi
+
+    print_info "Installing pykokkos to ${INSTALL_PREFIX}..."
+    print_warning "This may take 10-15 minutes as pykokkos builds its own Kokkos internally..."
+
+    # Try installation with different methods
+    if ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --break-system-packages --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
+        print_info "pykokkos installed with --break-system-packages"
+    elif ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
+        print_info "pykokkos installed successfully"
+    else
+        print_error "Failed to install pykokkos"
+        print_error "See /tmp/pykokkos_install.log for details"
+        print_warning "pykokkos is optional - you can continue without it"
+        print_warning "To skip Python dependencies next time: ./install.sh --skip-python"
+
+        # Ask user if they want to continue
+        read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+        print_info "Continuing without pykokkos..."
+        return 0
+    fi
 
     print_info "pykokkos installed successfully"
 fi
@@ -375,6 +602,18 @@ fi
 # ==============================================================================
 
 print_header "Building ADIOS2"
+
+# Check if already installed
+if is_installed "ADIOS2" "lib/cmake/adios2/adios2-config.cmake"; then
+    print_info "ADIOS2 already installed"
+    if ! ask_rebuild "ADIOS2"; then
+        print_info "Skipping ADIOS2 build"
+    else
+        rm -rf "${BUILD_DIR}/adios2"
+    fi
+fi
+
+if ! is_installed "ADIOS2" "lib/cmake/adios2/adios2-config.cmake" || ask_rebuild "ADIOS2" 2>/dev/null; then
 
 ADIOS2_BUILD_DIR="${BUILD_DIR}/adios2"
 mkdir -p "${ADIOS2_BUILD_DIR}"
@@ -394,10 +633,10 @@ if [ "$BUILD_MPI" = "yes" ] || command -v mpirun &> /dev/null; then
     print_info "Enabling MPI support"
 fi
 
-if [ "$ENABLE_CUDA" = "yes" ]; then
-    CMAKE_ARGS+=(-DADIOS2_USE_CUDA=ON)
-    print_info "Enabling CUDA support"
-fi
+# if [ "$ENABLE_CUDA" = "yes" ]; then
+#     CMAKE_ARGS+=(-DADIOS2_USE_CUDA=ON)
+#     print_info "Enabling CUDA support"
+# fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
     CMAKE_ARGS+=(-DADIOS2_USE_Python=ON)
@@ -414,6 +653,7 @@ print_info "Installing ADIOS2..."
 cmake --install .
 
 print_info "ADIOS2 installed successfully"
+fi  # End of ADIOS2 rebuild check
 
 # ==============================================================================
 # Build GoogleTest
@@ -421,6 +661,18 @@ print_info "ADIOS2 installed successfully"
 
 if [ "$BUILD_TESTS" = "yes" ]; then
     print_header "Building GoogleTest"
+
+    # Check if already installed
+    if is_installed "GoogleTest" "lib/cmake/GTest/GTestConfig.cmake"; then
+        print_info "GoogleTest already installed"
+        if ! ask_rebuild "GoogleTest"; then
+            print_info "Skipping GoogleTest build"
+        else
+            rm -rf "${BUILD_DIR}/googletest"
+        fi
+    fi
+
+    if ! is_installed "GoogleTest" "lib/cmake/GTest/GTestConfig.cmake" || ask_rebuild "GoogleTest" 2>/dev/null; then
 
     GTEST_BUILD_DIR="${BUILD_DIR}/googletest"
     mkdir -p "${GTEST_BUILD_DIR}"
@@ -440,6 +692,7 @@ if [ "$BUILD_TESTS" = "yes" ]; then
     cmake --install .
 
     print_info "GoogleTest installed successfully"
+    fi  # End of GoogleTest rebuild check
 fi
 
 # ==============================================================================
@@ -448,6 +701,18 @@ fi
 
 if [ "$BUILD_TESTS" = "yes" ]; then
     print_header "Building Google Benchmark"
+
+    # Check if already installed
+    if is_installed "Google Benchmark" "lib/cmake/benchmark/benchmarkConfig.cmake"; then
+        print_info "Google Benchmark already installed"
+        if ! ask_rebuild "Google Benchmark"; then
+            print_info "Skipping Google Benchmark build"
+        else
+            rm -rf "${BUILD_DIR}/benchmark"
+        fi
+    fi
+
+    if ! is_installed "Google Benchmark" "lib/cmake/benchmark/benchmarkConfig.cmake" || ask_rebuild "Google Benchmark" 2>/dev/null; then
 
     GBENCH_BUILD_DIR="${BUILD_DIR}/benchmark"
     mkdir -p "${GBENCH_BUILD_DIR}"
@@ -467,6 +732,7 @@ if [ "$BUILD_TESTS" = "yes" ]; then
     cmake --install .
 
     print_info "Google Benchmark installed successfully"
+    fi  # End of Google Benchmark rebuild check
 fi
 
 # ==============================================================================
