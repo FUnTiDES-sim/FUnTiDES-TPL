@@ -224,17 +224,36 @@ BUILD_DIR=$(cd "${BUILD_DIR}" && pwd)
 if [ "$BUILD_MPI" = "yes" ]; then
     print_header "Building Open MPI"
 
-    # Check if configure script exists, if not generate it
+    # Check if we need to run autogen (git checkout or no configure)
+    # Submodules have .git as a file, not directory
+    NEED_AUTOGEN=false
+
     if [ ! -f "${EXTERNAL_DIR}/openmpi/configure" ]; then
-        print_info "Configure script not found, generating it (this may take a few minutes)..."
+        NEED_AUTOGEN=true
+    elif [ -e "${EXTERNAL_DIR}/openmpi/.git" ]; then
+        # .git exists (either file for submodule or dir for regular clone)
+        NEED_AUTOGEN=true
+    fi
+
+    if [ "$NEED_AUTOGEN" = "true" ]; then
+        print_info "Generating configure script from git sources..."
         cd "${EXTERNAL_DIR}/openmpi"
 
+        # Clean any previous autogen artifacts
+        if [ -f "Makefile" ]; then
+            make distclean 2>/dev/null || true
+        fi
+
+        # Remove old configure to force regeneration
+        rm -f configure
+
+        # Run autogen
         if [ -f "autogen.pl" ]; then
-            print_info "Running autogen.pl..."
+            print_info "Running autogen.pl (this takes a few minutes)..."
             ./autogen.pl
         else
             print_error "Cannot find autogen.pl. Open MPI source may be incomplete."
-            print_error "Try: cd external/openmpi && git pull"
+            print_error "Try: git submodule update --init --recursive"
             exit 1
         fi
     fi
@@ -244,9 +263,6 @@ if [ "$BUILD_MPI" = "yes" ]; then
     cd "${MPI_BUILD_DIR}"
 
     CONFIGURE_ARGS="--prefix=${INSTALL_PREFIX}"
-
-    # Use internal PMIx and PRRTE (avoids system version conflicts)
-    CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-pmix=internal --with-prrte=internal"
 
     if [ "$ENABLE_CUDA" = "yes" ]; then
         CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-cuda=${CUDA_PATH}"
