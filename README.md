@@ -5,7 +5,7 @@ This repository contains all dependencies for the main project as git submodules
 ## Dependencies Included
 
 - **Kokkos 4.7** - Performance portability programming model
-- **Open MPI** - CUDA-aware MPI implementation
+- **Open MPI 4.1.x** - CUDA-aware MPI implementation (stable, production-ready)
 - **pykokkos** - Python bindings for Kokkos (includes pykokkos-base)
 - **pybind11** - C++/Python binding library
 - **ADIOS2** - I/O framework
@@ -103,7 +103,7 @@ mkdir -p external
 
 # Add submodules
 git submodule add -b 4.7.00 https://github.com/kokkos/kokkos.git external/kokkos
-git submodule add -b main https://github.com/open-mpi/ompi.git external/openmpi
+git submodule add -b v4.1.x https://github.com/open-mpi/ompi.git external/openmpi
 git submodule add https://github.com/kokkos/pykokkos.git external/pykokkos
 git submodule add -b v2.13.0 https://github.com/pybind/pybind11.git external/pybind11
 git submodule add -b master https://github.com/ornladios/ADIOS2.git external/adios2
@@ -113,6 +113,69 @@ git submodule add -b v1.9.0 https://github.com/google/benchmark.git external/ben
 # Commit
 git add .gitmodules external/
 git commit -m "Add TPL submodules"
+```
+
+## Setting Up Your Environment
+
+After installation, you need to configure your environment to use the TPL libraries. There are several ways to do this:
+
+### Option 1: Source the Setup Script (Recommended)
+
+The installation creates a `setup_env.sh` script in your installation directory:
+
+```bash
+# Load TPL environment (do this once per terminal session)
+source /path/to/install/setup_env.sh
+
+# Or use the provided standalone script
+source setup_tpl_env.sh /path/to/install
+```
+
+This sets:
+- `PATH` - for executables (mpirun, etc.)
+- `LD_LIBRARY_PATH` - for shared libraries
+- `CMAKE_PREFIX_PATH` - for CMake to find packages
+- `PKG_CONFIG_PATH` - for pkg-config
+- `PYTHONPATH` - for Python packages (if built)
+
+### Option 2: Add to Your Shell Configuration
+
+To automatically load TPL environment in every new terminal, add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# TPL Environment
+export TPL_PREFIX="$HOME/test"  # Change to your install path
+export PATH="${TPL_PREFIX}/bin:${PATH}"
+export LD_LIBRARY_PATH="${TPL_PREFIX}/lib:${LD_LIBRARY_PATH}"
+export CMAKE_PREFIX_PATH="${TPL_PREFIX}:${CMAKE_PREFIX_PATH}"
+```
+
+See `bashrc_snippet.sh` for a complete example.
+
+### Option 3: Manual Export (Quick Testing)
+
+For quick testing, manually export the variables:
+
+```bash
+export CMAKE_PREFIX_PATH=/path/to/install:$CMAKE_PREFIX_PATH
+export LD_LIBRARY_PATH=/path/to/install/lib:$LD_LIBRARY_PATH
+export PATH=/path/to/install/bin:$PATH
+```
+
+### Verify Installation
+
+Check that everything is working:
+
+```bash
+# Check MPI
+which mpirun
+mpirun --version
+
+# Check libraries
+ls $CMAKE_PREFIX_PATH/lib/cmake/
+
+# Test with a simple CMake project
+cmake -DCMAKE_PREFIX_PATH=/path/to/install ..
 ```
 
 ## Using in Your Main Project
@@ -143,9 +206,10 @@ target_link_libraries(your_target
 )
 ```
 
-Or set the environment variable:
+Or rely on the `CMAKE_PREFIX_PATH` environment variable (if you sourced the setup script):
 ```bash
-export CMAKE_PREFIX_PATH=/path/to/install/prefix:$CMAKE_PREFIX_PATH
+source /path/to/install/setup_env.sh
+cmake ..  # No need to specify CMAKE_PREFIX_PATH
 ```
 
 ## Requirements
@@ -182,17 +246,54 @@ cd external/openmpi
 ./autogen.pl
 ```
 
-### Open MPI C++ bindings error
-If you see an error about MPI C++ bindings, you may have the development branch (v6.x) which removed C++ support. Switch to the stable v5.0.x branch:
+### Open MPI configure script errors (syntax errors, OAC_PUSH_PREFIX)
+If you see syntax errors in the configure script like "OAC_PUSH_PREFIX" or "unexpected token", the configure script is corrupted. Clean and regenerate:
+
 ```bash
 cd external/openmpi
-git fetch origin
-git checkout v5.0.x
+make distclean 2>/dev/null || true
+rm -f configure
+./autogen.pl
 cd ../..
-# Clean and rebuild
 rm -rf build/openmpi
 ./install.sh --prefix=... --enable-cuda
 ```
+
+The updated install.sh now does this automatically when building from git.
+
+### Open MPI build errors (autotools/m4 macros)
+If you see errors about m4 macros, AC_MSG_WARN, or OPAL_BUILD_DOCS during the build, you may have a newer development branch. The repository now defaults to v4.1.x which is stable. If you need to switch:
+
+```bash
+cd external/openmpi
+git fetch origin
+git checkout v4.1.x  # Default, most stable
+cd ../..
+rm -rf build/openmpi
+./install.sh --prefix=... --enable-cuda
+```
+
+### Open MPI PMIx version error (v5.0.x only)
+If using v5.0.x and you see "PRRTE requires PMIx v0x00060001 or above", switch to v4.1.x:
+
+```bash
+cd external/openmpi
+git fetch origin
+git checkout v4.1.x
+git pull origin v4.1.x
+cd ../..
+rm -rf build/openmpi
+./install.sh --prefix=... --enable-cuda
+```
+
+**Check your current version:**
+```bash
+cd external/openmpi
+git branch  # Shows current branch
+cat VERSION # Shows version number
+```
+
+**IMPORTANT:** If you see version 5.x or 6.x, you MUST switch to v4.1.x as shown above. The .gitmodules default is v4.1.x, but if you cloned before the update, you may still be on an older branch.
 
 ### pykokkos installation fails
 Ensure you have a compatible Python environment:
