@@ -30,7 +30,7 @@ git submodule update --init --recursive
 ### 2. Install Dependencies
 
 ```bash
-./install.sh --prefix=$HOME/install
+./install.sh --prefix=$HOME/local
 ```
 
 This will build and install all dependencies to `$HOME/local`.
@@ -154,7 +154,10 @@ export CMAKE_PREFIX_PATH=/path/to/install/prefix:$CMAKE_PREFIX_PATH
 - C++17 compatible compiler (GCC 7+, Clang 5+)
 - Python 3.7+ (for pykokkos)
 - CUDA Toolkit 11.0+ (optional, for GPU support)
-- Autotools (for Open MPI: autoconf, automake, libtool)
+- For building Open MPI from git:
+  - autoconf, automake, libtool
+  - perl (for autogen.pl)
+  - flex, bison (recommended)
 
 ## Troubleshooting
 
@@ -163,6 +166,32 @@ Make sure CUDA toolkit is in your PATH:
 ```bash
 export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+```
+
+### Open MPI configure script not found
+The script automatically runs `autogen.pl` to generate the configure script. If this fails, ensure you have the required tools:
+```bash
+# Ubuntu/Debian
+sudo apt-get install autoconf automake libtool perl flex bison
+
+# RHEL/CentOS/Rocky
+sudo yum install autoconf automake libtool perl flex bison
+
+# Or manually generate:
+cd external/openmpi
+./autogen.pl
+```
+
+### Open MPI C++ bindings error
+If you see an error about MPI C++ bindings, you may have the development branch (v6.x) which removed C++ support. Switch to the stable v5.0.x branch:
+```bash
+cd external/openmpi
+git fetch origin
+git checkout v5.0.x
+cd ../..
+# Clean and rebuild
+rm -rf build/openmpi
+./install.sh --prefix=... --enable-cuda
 ```
 
 ### pykokkos installation fails
