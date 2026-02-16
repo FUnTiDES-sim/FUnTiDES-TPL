@@ -11,7 +11,7 @@ RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
 BLUE=$'\033[0;34m'
-NC=$'\033[0m'
+NC=$'\033[0m' # No Color
 
 # Default values
 INSTALL_PREFIX="$(pwd)/install"
@@ -579,120 +579,100 @@ fi
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pykokkos"
 
-    # Install build dependencies if not using venv (venv has requirements.txt)
+    # 1. Install Build Dependencies
+    print_info "Installing build dependencies..."
     if [ "$USE_VENV" != "yes" ]; then
-        print_info "Installing pykokkos build dependencies..."
-
-        # Try different methods to install dependencies
-        if ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja 2>/dev/null; then
-            print_info "Build dependencies installed with --break-system-packages"
-        elif ${PYTHON_EXEC} -m pip install --user scikit-build cmake ninja 2>/dev/null; then
-            print_info "Build dependencies installed to user directory"
-        else
-            print_warning "Could not install build dependencies automatically"
-            print_warning "Consider using --use-venv for easier dependency management"
-        fi
+        ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf 2>/dev/null
     else
-        print_info "Using dependencies from virtual environment"
-    fi
-
-    # Verify skbuild is available
-    if ! ${PYTHON_EXEC} -c "import skbuild" 2>/dev/null; then
-        print_error "scikit-build (skbuild) is not available for Python"
-        if [ "$USE_VENV" = "yes" ]; then
-            print_error "requirements.txt should have installed it - please check"
-        else
-            print_error "Please install manually: python3 -m pip install --user scikit-build"
-        fi
-        print_error "Or skip Python dependencies: ./install.sh --skip-python"
-        exit 1
+        ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf
     fi
 
     cd "${EXTERNAL_DIR}/pykokkos"
 
-    # Set environment for pykokkos build
+    # 2. Configure Environment
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
 
-    if [ "$USE_VENV" = "yes" ]; then
-        # Install to venv (simpler, no --prefix needed)
-        PYTHON_SITE_PACKAGES="${VENV_DIR}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
-        print_info "Installing pykokkos to virtual environment..."
-    else
-        # Install to prefix
-        PYTHON_SITE_PACKAGES="${INSTALL_PREFIX}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
-        print_info "Installing pykokkos to ${INSTALL_PREFIX}..."
-    fi
+    # 3. Prepare CMake Arguments
+    # Note: scikit-build handles CMAKE_INSTALL_PREFIX automatically, so we don't pass it.
 
-    export PYTHONPATH="${PYTHON_SITE_PACKAGES}:${PYTHONPATH}"
+    PK_ARGS="-DCMAKE_BUILD_TYPE=Release"
 
-    # Set CUDA architecture for pykokkos-base's internal Kokkos build
+    # --- FORCE EXTERNAL DEPENDENCIES (Interop & Py3.12 Fix) ---
+    # We explicitly turn off internal builds and point to our installed libs.
+    PK_ARGS="${PK_ARGS} -DENABLE_INTERNAL_PYBIND11=OFF"
+    PK_ARGS="${PK_ARGS} -Dpybind11_ROOT=${INSTALL_PREFIX}"
+    PK_ARGS="${PK_ARGS} -DENABLE_INTERNAL_KOKKOS=OFF"
+    PK_ARGS="${PK_ARGS} -DKokkos_ROOT=${INSTALL_PREFIX}"
+
+    # Feature flags (Must match how you built Kokkos)
+    PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=4"
+
+    # 4. Handle CUDA Architecture
     if [ "$ENABLE_CUDA" = "yes" ]; then
-        # Convert semicolon-separated to array
+        # Parse the CUDA_ARCH list.
         IFS=';' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
-        # Use first architecture for pykokkos
         FIRST_ARCH="${ARCH_ARRAY[0]}"
 
-        print_info "Setting CUDA architecture ${FIRST_ARCH} for pykokkos build"
-
-        # Map architecture number to Kokkos flag name
+        # Map architecture number to the specific Kokkos flag
         case "$FIRST_ARCH" in
-            70) KOKKOS_ARCH="VOLTA70" ;;
-            72) KOKKOS_ARCH="VOLTA72" ;;
-            75) KOKKOS_ARCH="TURING75" ;;
-            80) KOKKOS_ARCH="AMPERE80" ;;
-            86) KOKKOS_ARCH="AMPERE86" ;;
-            89) KOKKOS_ARCH="ADA89" ;;
-            90) KOKKOS_ARCH="HOPPER90" ;;
-            *) KOKKOS_ARCH="AMPERE80"; print_warning "Unknown CUDA arch ${FIRST_ARCH}, defaulting to AMPERE80" ;;
+            70) K_ARCH_FLAG="-DKokkos_ARCH_VOLTA70=ON" ;;
+            75) K_ARCH_FLAG="-DKokkos_ARCH_TURING75=ON" ;;
+            80) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
+            86) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE86=ON" ;;
+            89) K_ARCH_FLAG="-DKokkos_ARCH_ADA89=ON" ;;
+            90) K_ARCH_FLAG="-DKokkos_ARCH_HOPPER90=ON" ;;
+            *)  K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
         esac
 
-        # Set CMAKE arguments for pykokkos-base build
-        export CMAKE_ARGS="-DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_${KOKKOS_ARCH}=ON -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
-        print_info "CMAKE_ARGS=${CMAKE_ARGS}"
-    fi
-
-    print_info "Installing pykokkos to ${INSTALL_PREFIX}..."
-    print_warning "This may take 10-15 minutes as pykokkos builds its own Kokkos internally..."
-
-    # Try installation - venv doesn't need --prefix or --break-system-packages
-    if [ "$USE_VENV" = "yes" ]; then
-        if ${PYTHON_EXEC} -m pip install --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
-            print_info "pykokkos installed to virtual environment"
-        else
-            print_error "Failed to install pykokkos"
-            print_error "See /tmp/pykokkos_install.log for details"
-            print_warning "pykokkos is optional - you can continue without it"
-            read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
-            print_info "Continuing without pykokkos..."
-            return 0
-        fi
+        PK_ARGS="${PK_ARGS} -DENABLE_CUDA=ON ${K_ARCH_FLAG} -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
+        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH})"
     else
-        # Non-venv installation (to prefix)
-        if ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --break-system-packages --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
-            print_info "pykokkos installed with --break-system-packages"
-        elif ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
-            print_info "pykokkos installed successfully"
-        else
-            print_error "Failed to install pykokkos"
-            print_error "See /tmp/pykokkos_install.log for details"
-            print_warning "pykokkos is optional - you can continue without it"
-            print_warning "To skip Python dependencies next time: ./install.sh --skip-python"
-
-            read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
-            print_info "Continuing without pykokkos..."
-            return 0
-        fi
+        PK_ARGS="${PK_ARGS} -DENABLE_CUDA=OFF -DENABLE_OPENMP=ON"
+        print_info "Configuring PyKokkos-base for CPU (OpenMP)"
     fi
 
-    print_info "pykokkos installed successfully"
+    # 5. Install pykokkos-base (C++ Bindings)
+    print_info "Installing pykokkos-base..."
+
+    # --- LIMIT RAM USAGE ---
+    # Set parallelism to 2 to prevent OOM errors during template instantiation
+    export CMAKE_BUILD_PARALLEL_LEVEL=2
+    print_info "Limiting build parallelism to ${CMAKE_BUILD_PARALLEL_LEVEL} to save RAM"
+
+    if [ ! -f "install_base.py" ]; then
+        print_error "install_base.py not found in $(pwd). Repo might be incomplete."
+        exit 1
+    fi
+
+    # Run the installation script
+    # The '--' separates the python setup arguments from the CMake arguments
+    if ! ${PYTHON_EXEC} install_base.py install --force -- ${PK_ARGS}; then
+        print_error "Failed to install pykokkos-base."
+        exit 1
+    fi
+
+    # 6. Install pykokkos (Python Interface)
+    print_info "Installing pykokkos python interface..."
+
+    INSTALL_CMD="${PYTHON_EXEC} -m pip install"
+    if [ "$USE_VENV" = "no" ]; then
+        INSTALL_CMD="${INSTALL_CMD} --break-system-packages"
+    fi
+    # Use --no-build-isolation to ensure we use the environment we just configured
+    INSTALL_CMD="${INSTALL_CMD} --no-build-isolation -v ."
+
+    if ! ${INSTALL_CMD}; then
+        print_error "Failed to install pykokkos python layer."
+        exit 1
+    fi
+
+    # 7. Verify
+    if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
+        print_info "pykokkos installed and verified successfully!"
+    else
+        print_error "pykokkos installation completed, but 'import pykokkos' failed."
+        exit 1
+    fi
 fi
 
 # ==============================================================================
@@ -910,6 +890,7 @@ print_info "Environment setup script created: ${ENV_SCRIPT}"
 print_header "Installation Complete!"
 
 cat << EOF
+
 ${GREEN}All dependencies have been successfully built and installed!${NC}
 
 Installation directory: ${INSTALL_PREFIX}
@@ -926,24 +907,54 @@ To use these libraries in your project:
    ${YELLOW}source ${INSTALL_PREFIX}/setup_env.sh${NC}
 
 Libraries installed:
-  - Kokkos
+  - Kokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CUDA)" || echo "(CPU only)")
 EOF
 
-if [ "$BUILD_MPI" = "yes" ]; then
+if [ "$BUILD_MPI" = "yes" ] && [ -f "${INSTALL_PREFIX}/bin/mpirun" ]; then
     echo "  - Open MPI $([ "$ENABLE_CUDA" = "yes" ] && echo "(CUDA-aware)" || echo "")"
+elif [ "$BUILD_MPI" = "no" ]; then
+    echo "  - MPI (using system MPI)"
 fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
-    echo "  - pybind11"
-    echo "  - pykokkos"
+    if [ -f "${INSTALL_PREFIX}/lib/cmake/pybind11/pybind11Config.cmake" ]; then
+        echo "  - pybind11"
+    fi
+
+    # Check if pykokkos was actually installed (either to venv or prefix)
+    PYKOKKOS_INSTALLED="no"
+    if [ "$USE_VENV" = "yes" ] && [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" ]; then
+        if "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" -c "import pykokkos" 2>/dev/null; then
+            PYKOKKOS_INSTALLED="yes"
+        fi
+    elif ${PYTHON_EXEC:-python3} -c "import pykokkos" 2>/dev/null; then
+        PYKOKKOS_INSTALLED="yes"
+    fi
+
+    if [ "$PYKOKKOS_INSTALLED" = "yes" ]; then
+        echo "  - pykokkos"
+    fi
+elif [ "$BUILD_PYTHON" = "no" ]; then
+    echo "  - Python dependencies (skipped)"
 fi
 
 echo "  - ADIOS2"
 
 if [ "$BUILD_TESTS" = "yes" ]; then
-    echo "  - GoogleTest"
-    echo "  - Google Benchmark"
+    if [ -f "${INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake" ]; then
+        echo "  - GoogleTest"
+    fi
+    if [ -f "${INSTALL_PREFIX}/lib/cmake/benchmark/benchmarkConfig.cmake" ]; then
+        echo "  - Google Benchmark"
+    fi
 fi
 
 echo ""
+
+if [ "$BUILD_PYTHON" = "no" ]; then
+    echo -e "${YELLOW}Note:${NC} Python dependencies were skipped."
+    echo "To add them later, run: ./install.sh --prefix=${INSTALL_PREFIX} --enable-cuda --use-venv"
+    echo ""
+fi
+
 echo -e "${GREEN}Happy coding!${NC}"
