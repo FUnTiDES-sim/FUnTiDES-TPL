@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+INSTALL_ADIOS_DIR=$INSTALL_DIR/adios2
+
+rm -rf $INSTALL_ADIOS_DIR
+
+cmake $ADIOS_DIR -B $BUILD_DIR/adios2 -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR/adios2 -DADIOS2_USE_Kokkos=ON -DCMAKE_CXX_EXTENSIONS=OFF
+
+cd $BUILD_DIR/adios2
+
+make -j $NB_MAKE_PROCS
+make install
