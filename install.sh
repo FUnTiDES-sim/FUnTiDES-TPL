@@ -511,12 +511,32 @@ CMAKE_ARGS=(
 )
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
+    # Parse architectures
+    IFS=';' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
+
+    # We need to explicitly set Kokkos_ARCH_... flags for Docker builds
+    # where auto-detection fails (no GPU access).
+    KOKKOS_ARCH_FLAGS=""
+    for arch in "${ARCH_ARRAY[@]}"; do
+        case "$arch" in
+            70) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_VOLTA70=ON" ;;
+            75) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_TURING75=ON" ;;
+            80) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_AMPERE80=ON" ;;
+            86) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_AMPERE86=ON" ;;
+            89) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_ADA89=ON" ;;
+            90) KOKKOS_ARCH_FLAGS="${KOKKOS_ARCH_FLAGS} -DKokkos_ARCH_HOPPER90=ON" ;;
+            *)  print_warning "Unknown CUDA arch $arch, Kokkos might fail auto-detection" ;;
+        esac
+    done
+
     CMAKE_ARGS+=(
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_LAMBDA=ON
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
+        ${KOKKOS_ARCH_FLAGS}
     )
     print_info "Enabling CUDA support with architectures: ${CUDA_ARCH}"
+    print_info "Explicit Kokkos Arch Flags: ${KOKKOS_ARCH_FLAGS}"
 fi
 
 print_info "Configuring Kokkos..."
