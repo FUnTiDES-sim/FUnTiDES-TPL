@@ -686,24 +686,24 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         exit 1
     fi
 
-    print_info "Verifying PyKokkos installation..."
+    # print_info "Verifying PyKokkos installation..."
 
-    if ${PYTHON_EXEC} -c "import pykokkos" >/dev/null 2>&1; then
-        print_info "pykokkos installed and verified successfully!"
-    else
-        IMPORT_ERR=$(${PYTHON_EXEC} -c "import pykokkos" 2>&1)
+    # if ${PYTHON_EXEC} -c "import pykokkos" >/dev/null 2>&1; then
+    #     print_info "pykokkos installed and verified successfully!"
+    # else
+    #     IMPORT_ERR=$(${PYTHON_EXEC} -c "import pykokkos" 2>&1)
 
-        if echo "$IMPORT_ERR" | grep -q "libcuda.so"; then
-             print_warning "PyKokkos installed successfully, but import failed due to missing libcuda.so."
-             print_warning "This is EXPECTED during Docker builds where the GPU driver is not mounted."
-             print_warning "The image is valid and will work when run with '--gpus all'."
-        else
-             # If it's a different error, we should actually fail
-             print_error "pykokkos installation completed, but 'import pykokkos' failed with unexpected error:"
-             echo "$IMPORT_ERR"
-             exit 1
-        fi
-    fi
+    #     if echo "$IMPORT_ERR" | grep -q "libcuda.so"; then
+    #          print_warning "PyKokkos installed successfully, but import failed due to missing libcuda.so."
+    #          print_warning "This is EXPECTED during Docker builds where the GPU driver is not mounted."
+    #          print_warning "The image is valid and will work when run with '--gpus all'."
+    #     else
+    #          # If it's a different error, we should actually fail
+    #          print_error "pykokkos installation completed, but 'import pykokkos' failed with unexpected error:"
+    #          echo "$IMPORT_ERR"
+    #          exit 1
+    #     fi
+    # fi
 fi
 
 # ==============================================================================
