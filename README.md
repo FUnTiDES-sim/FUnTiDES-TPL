@@ -24,8 +24,8 @@ The repository defaults to Open MPI v4.1.x for maximum stability:
 ### 1. Clone with Submodules
 
 ```bash
-git clone --recursive https://github.com/yourusername/your-tpl-repo.git
-cd your-tpl-repo
+git clone --recursive https://github.com/FUnTiDES-sim/FUnTiDES-TPL fun-tpl
+cd fun-tpl 
 ```
 
 Or if you already cloned without `--recursive`:
