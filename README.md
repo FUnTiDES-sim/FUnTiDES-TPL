@@ -12,6 +12,13 @@ This repository contains all dependencies for the main project as git submodules
 - **GoogleTest** - C++ testing framework
 - **Google Benchmark** - C++ microbenchmarking library
 
+### Open MPI Version Notes
+
+The repository defaults to Open MPI v4.1.x for maximum stability:
+- **v4.1.x**: Most stable, production-ready, fewer dependencies ✅ **RECOMMENDED & DEFAULT**
+- **v5.0.x**: Current stable, requires newer PMIx, more complex build
+- **main/v6.x**: Development branch, removed C++ bindings (not recommended)
+
 ## Quick Start
 
 ### 1. Clone with Submodules
@@ -50,7 +57,28 @@ Options:
   --skip-python          Skip Python dependencies (pykokkos)
   --skip-tests           Skip test libraries (GTest, GBench)
   --jobs=N               Number of parallel jobs (default: 8)
+  --force                Force rebuild of all components
   -h, --help             Show this help message
+```
+
+### Smart Rebuilding
+
+The script automatically detects which components are already installed:
+- **First run**: Builds everything
+- **Subsequent runs**: Skips already-installed components
+- **Prompted rebuilds**: Asks if you want to rebuild each installed component
+- **Force rebuild**: Use `--force` to rebuild everything without prompting
+
+Example:
+```bash
+# First install
+./install.sh --prefix=$HOME/local --enable-cuda
+
+# Later, add tests (Kokkos and MPI will be skipped)
+./install.sh --prefix=$HOME/local --enable-cuda
+
+# Force complete rebuild
+./install.sh --prefix=$HOME/local --enable-cuda --force
 ```
 
 ### Examples
@@ -216,12 +244,14 @@ cmake ..  # No need to specify CMAKE_PREFIX_PATH
 
 - CMake 3.18+
 - C++17 compatible compiler (GCC 7+, Clang 5+)
-- Python 3.7+ (for pykokkos)
+- Python 3.7+ with pip (for pykokkos)
 - CUDA Toolkit 11.0+ (optional, for GPU support)
 - For building Open MPI from git:
   - autoconf, automake, libtool
   - perl (for autogen.pl)
   - flex, bison (recommended)
+
+**Note:** The install script automatically installs Python build dependencies (scikit-build, cmake, ninja) when building pykokkos.
 
 ## Troubleshooting
 
@@ -296,10 +326,29 @@ cat VERSION # Shows version number
 **IMPORTANT:** If you see version 5.x or 6.x, you MUST switch to v4.1.x as shown above. The .gitmodules default is v4.1.x, but if you cloned before the update, you may still be on an older branch.
 
 ### pykokkos installation fails
-Ensure you have a compatible Python environment:
+The install script now automatically installs build dependencies (scikit-build, cmake, ninja) and sets CUDA architecture flags.
+
+**Important:** pykokkos builds its own internal Kokkos, which can take 10-15 minutes and may have CUDA architecture issues.
+
+If you encounter errors:
+
 ```bash
-python3 -m pip install --upgrade pip setuptools wheel
+# Option 1: Skip pykokkos entirely (recommended if you don't need Python bindings)
+./install.sh --prefix=... --enable-cuda --skip-python
+
+# Option 2: Specify CUDA architecture explicitly
+export CMAKE_ARGS="-DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_AMPERE80=ON"
+cd external/pykokkos
+python3 -m pip install --prefix=/path/to/install --break-system-packages .
 ```
+
+**Common pykokkos errors:**
+- `CUDA enabled but no NVIDIA GPU architecture` → Script now auto-sets this from --cuda-arch
+- `ModuleNotFoundError: No module named 'skbuild'` → Build dependencies missing (auto-fixed by script)
+- `Could not build wheels for pykokkos-base` → CUDA architecture issue or build timeout
+- Permission denied → Use `--break-system-packages` or `--user` flag
+
+**Note:** If you only need Kokkos for C++ (not Python), skip pykokkos with `--skip-python`.
 
 ### CMake doesn't find dependencies
 Make sure CMAKE_PREFIX_PATH is set correctly:

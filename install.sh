@@ -7,21 +7,23 @@ set -e  # Exit on error
 # ==============================================================================
 
 # Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+NC=$'\033[0m'
 
 # Default values
 INSTALL_PREFIX="$(pwd)/install"
 ENABLE_CUDA="auto"
-CUDA_ARCH="70,75,80,86"
+CUDA_ARCH="70;75;80;86;89"
 BUILD_MPI="yes"
 BUILD_PYTHON="yes"
 BUILD_TESTS="yes"
 NUM_JOBS=8
 FORCE_REBUILD="no"
+USE_VENV="auto"
+VENV_NAME="tpl-venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERNAL_DIR="${SCRIPT_DIR}/external"
 BUILD_DIR="${SCRIPT_DIR}/build"
@@ -100,18 +102,21 @@ Options:
   --prefix=PATH          Installation prefix (default: ./install)
   --enable-cuda          Enable CUDA support (default: auto-detect)
   --disable-cuda         Disable CUDA support
-  --cuda-arch=ARCH       CUDA architecture (default: 70,75,80,86)
+  --cuda-arch=ARCH       CUDA architecture (default: 70;75;80;86;89)
   --enable-mpi           Build Open MPI (default: yes)
   --disable-mpi          Use system MPI instead
   --skip-python          Skip Python dependencies (pykokkos)
   --skip-tests           Skip test libraries (GTest, GBench)
+  --use-venv             Use Python virtual environment (recommended)
+  --no-venv              Don't use virtual environment
+  --venv-name=NAME       Virtual environment name (default: tpl-venv)
   --jobs=N               Number of parallel jobs (default: 8)
   --force                Force rebuild of all components
   -h, --help             Show this help message
 
 Examples:
   ./install.sh --prefix=\$HOME/local
-  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80
+  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80 --use-venv
   ./install.sh --disable-mpi --skip-tests
 
 EOF
@@ -142,6 +147,15 @@ for arg in "$@"; do
             ;;
         --skip-tests)
             BUILD_TESTS="no"
+            ;;
+        --use-venv)
+            USE_VENV="yes"
+            ;;
+        --no-venv)
+            USE_VENV="no"
+            ;;
+        --venv-name=*)
+            VENV_NAME="${arg#*=}"
             ;;
         --jobs=*)
             NUM_JOBS="${arg#*=}"
@@ -223,15 +237,53 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     PYTHON_EXEC=$(which python3)
     print_info "Using Python: $PYTHON_EXEC"
 
-    # Check for pip
-    if ! ${PYTHON_EXEC} -m pip --version &> /dev/null; then
-        print_error "pip is not available for Python 3"
-        print_error "Install with: sudo apt-get install python3-pip (Ubuntu/Debian)"
-        print_error "           or: sudo yum install python3-pip (RHEL/CentOS)"
-        exit 1
+    # Decide whether to use venv
+    if [ "$USE_VENV" = "auto" ]; then
+        # Auto-enable venv if requirements.txt exists
+        if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
+            USE_VENV="yes"
+            print_info "Found requirements.txt - will use virtual environment"
+        else
+            USE_VENV="no"
+        fi
     fi
 
-    print_info "pip is available"
+    # Setup virtual environment if requested
+    if [ "$USE_VENV" = "yes" ]; then
+        VENV_DIR="${INSTALL_PREFIX}/${VENV_NAME}"
+
+        if [ ! -d "${VENV_DIR}" ]; then
+            print_info "Creating Python virtual environment at ${VENV_DIR}"
+            ${PYTHON_EXEC} -m venv "${VENV_DIR}"
+        else
+            print_info "Using existing virtual environment at ${VENV_DIR}"
+        fi
+
+        # Activate venv
+        source "${VENV_DIR}/bin/activate"
+        PYTHON_EXEC="${VENV_DIR}/bin/python"
+        print_info "Activated virtual environment"
+        print_info "Using Python: $PYTHON_EXEC"
+
+        # Install requirements if file exists
+        if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
+            print_info "Installing Python requirements..."
+            ${PYTHON_EXEC} -m pip install --upgrade pip
+            ${PYTHON_EXEC} -m pip install -r "${SCRIPT_DIR}/requirements.txt"
+            print_info "Python requirements installed"
+        fi
+    else
+        # Check for pip without venv
+        if ! ${PYTHON_EXEC} -m pip --version &> /dev/null; then
+            print_error "pip is not available for Python 3"
+            print_error "Install with: sudo apt-get install python3-pip (Ubuntu/Debian)"
+            print_error "           or: sudo yum install python3-pip (RHEL/CentOS)"
+            print_error "Or use --use-venv to create isolated environment"
+            exit 1
+        fi
+
+        print_info "pip is available"
+    fi
 fi
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
@@ -310,21 +362,24 @@ BUILD_DIR=$(cd "${BUILD_DIR}" && pwd)
 if [ "$BUILD_MPI" = "yes" ]; then
     print_header "Building Open MPI"
 
-    # Check if already installed
+    # Check if already installed and whether to rebuild
+    REBUILD_OMPI="no"
     if is_installed "Open MPI" "bin/mpirun"; then
         print_info "Open MPI already installed at ${INSTALL_PREFIX}/bin/mpirun"
-        if ! ask_rebuild "Open MPI"; then
+        if ask_rebuild "Open MPI"; then
+            REBUILD_OMPI="yes"
+            rm -rf "${BUILD_DIR}/openmpi"
+        else
             print_info "Skipping Open MPI build"
             # Add to PATH for subsequent builds
             export PATH="${INSTALL_PREFIX}/bin:$PATH"
             export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH"
-        else
-            # Clean build directory before rebuild
-            rm -rf "${BUILD_DIR}/openmpi"
         fi
+    else
+        REBUILD_OMPI="yes"
     fi
 
-    if ! is_installed "Open MPI" "bin/mpirun" || ask_rebuild "Open MPI" 2>/dev/null; then
+    if [ "$REBUILD_OMPI" = "yes" ]; then
 
     # Check if we need to run autogen (git checkout or no configure)
     # Submodules have .git as a file, not directory
@@ -424,17 +479,21 @@ fi
 
 print_header "Building Kokkos"
 
-# Check if already installed
+# Check if already installed and whether to rebuild
+REBUILD_KOKKOS="no"
 if is_installed "Kokkos" "lib/cmake/Kokkos/KokkosConfig.cmake"; then
     print_info "Kokkos already installed at ${INSTALL_PREFIX}"
-    if ! ask_rebuild "Kokkos"; then
-        print_info "Skipping Kokkos build"
-    else
+    if ask_rebuild "Kokkos"; then
+        REBUILD_KOKKOS="yes"
         rm -rf "${BUILD_DIR}/kokkos"
+    else
+        print_info "Skipping Kokkos build"
     fi
+else
+    REBUILD_KOKKOS="yes"
 fi
 
-if ! is_installed "Kokkos" "lib/cmake/Kokkos/KokkosConfig.cmake" || ask_rebuild "Kokkos" 2>/dev/null; then
+if [ "$REBUILD_KOKKOS" = "yes" ]; then
 
 KOKKOS_BUILD_DIR="${BUILD_DIR}/kokkos"
 mkdir -p "${KOKKOS_BUILD_DIR}"
@@ -444,6 +503,7 @@ CMAKE_ARGS=(
     -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}"
     -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}"
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DKokkos_ENABLE_SERIAL=ON
     -DKokkos_ENABLE_OPENMP=ON
     -DKokkos_ENABLE_TESTS=OFF
@@ -478,17 +538,21 @@ fi  # End of Kokkos rebuild check
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pybind11"
 
-    # Check if already installed
+    # Check if already installed and whether to rebuild
+    REBUILD_PYBIND11="no"
     if is_installed "pybind11" "lib/cmake/pybind11/pybind11Config.cmake"; then
         print_info "pybind11 already installed"
-        if ! ask_rebuild "pybind11"; then
-            print_info "Skipping pybind11 build"
-        else
+        if ask_rebuild "pybind11"; then
+            REBUILD_PYBIND11="yes"
             rm -rf "${BUILD_DIR}/pybind11"
+        else
+            print_info "Skipping pybind11 build"
         fi
+    else
+        REBUILD_PYBIND11="yes"
     fi
 
-    if ! is_installed "pybind11" "lib/cmake/pybind11/pybind11Config.cmake" || ask_rebuild "pybind11" 2>/dev/null; then
+    if [ "$REBUILD_PYBIND11" = "yes" ]; then
 
     PYBIND11_BUILD_DIR="${BUILD_DIR}/pybind11"
     mkdir -p "${PYBIND11_BUILD_DIR}"
@@ -515,24 +579,31 @@ fi
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pykokkos"
 
-    # Install build dependencies first (system-wide or user, not to prefix)
-    print_info "Installing pykokkos build dependencies..."
+    # Install build dependencies if not using venv (venv has requirements.txt)
+    if [ "$USE_VENV" != "yes" ]; then
+        print_info "Installing pykokkos build dependencies..."
 
-    # Try different methods to install dependencies
-    if ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja 2>/dev/null; then
-        print_info "Build dependencies installed with --break-system-packages"
-    elif ${PYTHON_EXEC} -m pip install --user scikit-build cmake ninja 2>/dev/null; then
-        print_info "Build dependencies installed to user directory"
+        # Try different methods to install dependencies
+        if ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja 2>/dev/null; then
+            print_info "Build dependencies installed with --break-system-packages"
+        elif ${PYTHON_EXEC} -m pip install --user scikit-build cmake ninja 2>/dev/null; then
+            print_info "Build dependencies installed to user directory"
+        else
+            print_warning "Could not install build dependencies automatically"
+            print_warning "Consider using --use-venv for easier dependency management"
+        fi
     else
-        print_warning "Could not install build dependencies automatically"
-        print_warning "You may need to install manually: pip install scikit-build cmake ninja"
+        print_info "Using dependencies from virtual environment"
     fi
 
     # Verify skbuild is available
     if ! ${PYTHON_EXEC} -c "import skbuild" 2>/dev/null; then
         print_error "scikit-build (skbuild) is not available for Python"
-        print_error "Please install manually:"
-        print_error "  python3 -m pip install --user scikit-build cmake ninja"
+        if [ "$USE_VENV" = "yes" ]; then
+            print_error "requirements.txt should have installed it - please check"
+        else
+            print_error "Please install manually: python3 -m pip install --user scikit-build"
+        fi
         print_error "Or skip Python dependencies: ./install.sh --skip-python"
         exit 1
     fi
@@ -541,13 +612,23 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # Set environment for pykokkos build
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
-    PYTHON_SITE_PACKAGES="${INSTALL_PREFIX}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+
+    if [ "$USE_VENV" = "yes" ]; then
+        # Install to venv (simpler, no --prefix needed)
+        PYTHON_SITE_PACKAGES="${VENV_DIR}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+        print_info "Installing pykokkos to virtual environment..."
+    else
+        # Install to prefix
+        PYTHON_SITE_PACKAGES="${INSTALL_PREFIX}/lib/python$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+        print_info "Installing pykokkos to ${INSTALL_PREFIX}..."
+    fi
+
     export PYTHONPATH="${PYTHON_SITE_PACKAGES}:${PYTHONPATH}"
 
     # Set CUDA architecture for pykokkos-base's internal Kokkos build
     if [ "$ENABLE_CUDA" = "yes" ]; then
-        # Convert comma-separated to array
-        IFS=',' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
+        # Convert semicolon-separated to array
+        IFS=';' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
         # Use first architecture for pykokkos
         FIRST_ARCH="${ARCH_ARRAY[0]}"
 
@@ -573,25 +654,42 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     print_info "Installing pykokkos to ${INSTALL_PREFIX}..."
     print_warning "This may take 10-15 minutes as pykokkos builds its own Kokkos internally..."
 
-    # Try installation with different methods
-    if ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --break-system-packages --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
-        print_info "pykokkos installed with --break-system-packages"
-    elif ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
-        print_info "pykokkos installed successfully"
-    else
-        print_error "Failed to install pykokkos"
-        print_error "See /tmp/pykokkos_install.log for details"
-        print_warning "pykokkos is optional - you can continue without it"
-        print_warning "To skip Python dependencies next time: ./install.sh --skip-python"
-
-        # Ask user if they want to continue
-        read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
+    # Try installation - venv doesn't need --prefix or --break-system-packages
+    if [ "$USE_VENV" = "yes" ]; then
+        if ${PYTHON_EXEC} -m pip install --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
+            print_info "pykokkos installed to virtual environment"
+        else
+            print_error "Failed to install pykokkos"
+            print_error "See /tmp/pykokkos_install.log for details"
+            print_warning "pykokkos is optional - you can continue without it"
+            read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+            print_info "Continuing without pykokkos..."
+            return 0
         fi
-        print_info "Continuing without pykokkos..."
-        return 0
+    else
+        # Non-venv installation (to prefix)
+        if ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --break-system-packages --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
+            print_info "pykokkos installed with --break-system-packages"
+        elif ${PYTHON_EXEC} -m pip install --prefix="${INSTALL_PREFIX}" --no-build-isolation -v . 2>&1 | tee /tmp/pykokkos_install.log; then
+            print_info "pykokkos installed successfully"
+        else
+            print_error "Failed to install pykokkos"
+            print_error "See /tmp/pykokkos_install.log for details"
+            print_warning "pykokkos is optional - you can continue without it"
+            print_warning "To skip Python dependencies next time: ./install.sh --skip-python"
+
+            read -p "Continue installation without pykokkos? (y/n) " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+            print_info "Continuing without pykokkos..."
+            return 0
+        fi
     fi
 
     print_info "pykokkos installed successfully"
@@ -603,17 +701,21 @@ fi
 
 print_header "Building ADIOS2"
 
-# Check if already installed
+# Check if already installed and whether to rebuild
+REBUILD_ADIOS2="no"
 if is_installed "ADIOS2" "lib/cmake/adios2/adios2-config.cmake"; then
     print_info "ADIOS2 already installed"
-    if ! ask_rebuild "ADIOS2"; then
-        print_info "Skipping ADIOS2 build"
-    else
+    if ask_rebuild "ADIOS2"; then
+        REBUILD_ADIOS2="yes"
         rm -rf "${BUILD_DIR}/adios2"
+    else
+        print_info "Skipping ADIOS2 build"
     fi
+else
+    REBUILD_ADIOS2="yes"
 fi
 
-if ! is_installed "ADIOS2" "lib/cmake/adios2/adios2-config.cmake" || ask_rebuild "ADIOS2" 2>/dev/null; then
+if [ "$REBUILD_ADIOS2" = "yes" ]; then
 
 ADIOS2_BUILD_DIR="${BUILD_DIR}/adios2"
 mkdir -p "${ADIOS2_BUILD_DIR}"
@@ -633,14 +735,18 @@ if [ "$BUILD_MPI" = "yes" ] || command -v mpirun &> /dev/null; then
     print_info "Enabling MPI support"
 fi
 
-# if [ "$ENABLE_CUDA" = "yes" ]; then
-#     CMAKE_ARGS+=(-DADIOS2_USE_CUDA=ON)
-#     print_info "Enabling CUDA support"
-# fi
+# Note: ADIOS2_USE_CUDA is incompatible with ADIOS2_USE_Kokkos
+# When using Kokkos, CUDA support comes through Kokkos, not directly
+if [ "$ENABLE_CUDA" = "yes" ]; then
+    print_info "CUDA support provided through Kokkos (ADIOS2_USE_CUDA incompatible with ADIOS2_USE_Kokkos)"
+fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
     CMAKE_ARGS+=(-DADIOS2_USE_Python=ON)
     print_info "Enabling Python support"
+else
+    CMAKE_ARGS+=(-DADIOS2_USE_Python=OFF)
+    print_info "Disabling Python support"
 fi
 
 print_info "Configuring ADIOS2..."
@@ -662,17 +768,21 @@ fi  # End of ADIOS2 rebuild check
 if [ "$BUILD_TESTS" = "yes" ]; then
     print_header "Building GoogleTest"
 
-    # Check if already installed
+    # Check if already installed and whether to rebuild
+    REBUILD_GTEST="no"
     if is_installed "GoogleTest" "lib/cmake/GTest/GTestConfig.cmake"; then
         print_info "GoogleTest already installed"
-        if ! ask_rebuild "GoogleTest"; then
-            print_info "Skipping GoogleTest build"
-        else
+        if ask_rebuild "GoogleTest"; then
+            REBUILD_GTEST="yes"
             rm -rf "${BUILD_DIR}/googletest"
+        else
+            print_info "Skipping GoogleTest build"
         fi
+    else
+        REBUILD_GTEST="yes"
     fi
 
-    if ! is_installed "GoogleTest" "lib/cmake/GTest/GTestConfig.cmake" || ask_rebuild "GoogleTest" 2>/dev/null; then
+    if [ "$REBUILD_GTEST" = "yes" ]; then
 
     GTEST_BUILD_DIR="${BUILD_DIR}/googletest"
     mkdir -p "${GTEST_BUILD_DIR}"
@@ -702,17 +812,21 @@ fi
 if [ "$BUILD_TESTS" = "yes" ]; then
     print_header "Building Google Benchmark"
 
-    # Check if already installed
+    # Check if already installed and whether to rebuild
+    REBUILD_GBENCH="no"
     if is_installed "Google Benchmark" "lib/cmake/benchmark/benchmarkConfig.cmake"; then
         print_info "Google Benchmark already installed"
-        if ! ask_rebuild "Google Benchmark"; then
-            print_info "Skipping Google Benchmark build"
-        else
+        if ask_rebuild "Google Benchmark"; then
+            REBUILD_GBENCH="yes"
             rm -rf "${BUILD_DIR}/benchmark"
+        else
+            print_info "Skipping Google Benchmark build"
         fi
+    else
+        REBUILD_GBENCH="yes"
     fi
 
-    if ! is_installed "Google Benchmark" "lib/cmake/benchmark/benchmarkConfig.cmake" || ask_rebuild "Google Benchmark" 2>/dev/null; then
+    if [ "$REBUILD_GBENCH" = "yes" ]; then
 
     GBENCH_BUILD_DIR="${BUILD_DIR}/benchmark"
     mkdir -p "${GBENCH_BUILD_DIR}"
@@ -742,19 +856,44 @@ fi
 print_header "Creating Environment Setup Script"
 
 ENV_SCRIPT="${INSTALL_PREFIX}/setup_env.sh"
-cat > "${ENV_SCRIPT}" << EOF
+
+# Start with the header
+cat > "${ENV_SCRIPT}" << 'EOF'
 #!/bin/bash
 # Source this script to set up the environment for using TPL libraries
-# Usage: source ${INSTALL_PREFIX}/setup_env.sh
+EOF
 
-export PATH="${INSTALL_PREFIX}/bin:\$PATH"
-export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:\$LD_LIBRARY_PATH"
-export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:\$CMAKE_PREFIX_PATH"
+echo "# Usage: source ${INSTALL_PREFIX}/setup_env.sh" >> "${ENV_SCRIPT}"
+echo "" >> "${ENV_SCRIPT}"
 
-if [ "$BUILD_PYTHON" = "yes" ]; then
-    PYTHON_VERSION=\$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    export PYTHONPATH="${INSTALL_PREFIX}/lib/python\${PYTHON_VERSION}/site-packages:\$PYTHONPATH"
+# Add PATH and library paths
+cat >> "${ENV_SCRIPT}" << EOF
+export PATH="${INSTALL_PREFIX}/bin:\${PATH}"
+export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
+export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
+EOF
+
+# Add venv activation if used
+if [ "$USE_VENV" = "yes" ]; then
+    cat >> "${ENV_SCRIPT}" << EOF
+
+# Activate Python virtual environment
+if [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/activate" ]; then
+    source "${INSTALL_PREFIX}/${VENV_NAME}/bin/activate"
+    echo "Python virtual environment activated"
 fi
+EOF
+elif [ "$BUILD_PYTHON" = "yes" ]; then
+    # Add PYTHONPATH for non-venv Python installs
+    cat >> "${ENV_SCRIPT}" << 'EOF'
+
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+EOF
+    echo "export PYTHONPATH=\"${INSTALL_PREFIX}/lib/python\${PYTHON_VERSION}/site-packages:\${PYTHONPATH}\"" >> "${ENV_SCRIPT}"
+fi
+
+# Add footer
+cat >> "${ENV_SCRIPT}" << EOF
 
 echo "TPL environment configured!"
 echo "Installation prefix: ${INSTALL_PREFIX}"
@@ -771,7 +910,6 @@ print_info "Environment setup script created: ${ENV_SCRIPT}"
 print_header "Installation Complete!"
 
 cat << EOF
-
 ${GREEN}All dependencies have been successfully built and installed!${NC}
 
 Installation directory: ${INSTALL_PREFIX}
@@ -788,7 +926,7 @@ To use these libraries in your project:
    ${YELLOW}source ${INSTALL_PREFIX}/setup_env.sh${NC}
 
 Libraries installed:
-  - Kokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CUDA)" || echo "(CPU only)")
+  - Kokkos
 EOF
 
 if [ "$BUILD_MPI" = "yes" ]; then

@@ -1,0 +1,17 @@
+# Python dependencies for TPL build
+# Install with: pip install -r requirements.txt
+
+# Build tools
+scikit-build>=0.17.0
+cmake>=3.18.0
+ninja>=1.10.0
+
+# Core dependencies
+numpy>=1.19.5
+
+# Optional: MPI for Python (needed if building ADIOS2 with Python+MPI)
+mpi4py>=3.1.0
+
+# Optional: For pykokkos (if building)
+# Note: pykokkos itself will be installed separately
+pybind11>=2.10.0
