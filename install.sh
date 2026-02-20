@@ -511,12 +511,22 @@ CMAKE_ARGS=(
 )
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
+    # Map the numeric arch to the Kokkos keyword
+    case "${CUDA_ARCH}" in
+        89) KOKKOS_ARCH_NAME="ADA89" ;;
+        80) KOKKOS_ARCH_NAME="AMPERE80" ;;
+        86) KOKKOS_ARCH_NAME="AMPERE86" ;;
+        70) KOKKOS_ARCH_NAME="VOLTA70" ;;
+        *)  KOKKOS_ARCH_NAME="${CUDA_ARCH}" ;; # Fallback
+    esac
+
     CMAKE_ARGS+=(
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_LAMBDA=ON
+        -DKokkos_ARCH_${KOKKOS_ARCH_NAME}=ON
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
     )
-    print_info "Enabling CUDA support with architectures: ${CUDA_ARCH}"
+    print_info "Enabling CUDA support with architecture: ${KOKKOS_ARCH_NAME}"
 fi
 
 print_info "Configuring Kokkos..."
