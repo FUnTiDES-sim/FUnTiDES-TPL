@@ -574,7 +574,8 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
         -DPYBIND11_TEST=OFF \
-        -DPYBIND11_INSTALL=ON
+        -DPYBIND11_INSTALL=ON \
+        -DPython_EXECUTABLE="${PYTHON_EXEC}"
 
     print_info "Installing pybind11..."
     cmake --install .
