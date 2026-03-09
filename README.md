@@ -356,6 +356,31 @@ Make sure CMAKE_PREFIX_PATH is set correctly:
 cmake -DCMAKE_PREFIX_PATH=/path/to/install/prefix ..
 ```
 
+
+### Troubleshooting: Pybind11 & NVCC Compilation Bug
+
+When building the Python wrapper (`ENABLE_PYWRAP=ON`) with **CUDA/Kokkos enabled** on systems using newer host compilers (like GCC 13 or GCC 14), you might encounter a fatal compilation error from the NVIDIA compiler (`nvcc`) when it tries to parse the Pybind11 headers.
+
+**Typical Error Output:**
+`error: ambiguous template instantiation for ‘struct pybind11::detail::initimpl::factory<pybind11::enum_...`
+
+This is a known bug in nvcc's C++ parser where it fails to parse a specific lambda function used inside pybind11.h when paired with modern GCC standard libraries.
+The Workaround
+
+To completely bypass this bug and finish compiling the Python module, comment out the problematic line in your local Pybind11 installation.
+
+Locate your pybind11.h file. Look at the path in your compiler error log (e.g., ~/local/include/pybind11/pybind11.h or /usr/include/pybind11/pybind11.h).
+
+Find the enum integer constructor. Open the file and search for the following exact line (usually around line 2237 or 2978, depending on your Pybind11 version):
+C++
+
+`def(init([](Scalar i) { return static_cast<Type>(i); }), arg("value"));`
+
+Comment the line out by adding // to the beginning:
+Recompile. Save the file and run make -j again in FUnTiDES.
+
+Note: Commenting out this line removes the ability to instantiate enums directly from integers in Python (e.g., calling MethodType(1) will no longer work). However, standard enum attribute access (e.g., MethodType.SEM) remains completely intact and will function normally.
+
 ## Build Artifacts
 
 After a successful build, your installation directory will contain:

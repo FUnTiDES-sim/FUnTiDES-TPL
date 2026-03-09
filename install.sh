@@ -508,6 +508,7 @@ CMAKE_ARGS=(
     -DKokkos_ENABLE_OPENMP=ON
     -DKokkos_ENABLE_TESTS=OFF
     -DKokkos_ENABLE_EXAMPLES=OFF
+    -DBUILD_SHARED_LIBS=ON
 )
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
@@ -522,7 +523,6 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
 
     CMAKE_ARGS+=(
         -DKokkos_ENABLE_CUDA=ON
-        -DKokkos_ENABLE_CUDA_LAMBDA=ON
         -DKokkos_ENABLE_CUDA_CONSTEXPR=ON
         -DKokkos_ARCH_${KOKKOS_ARCH_NAME}=ON
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
