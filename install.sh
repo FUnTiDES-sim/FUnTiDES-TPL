@@ -17,12 +17,13 @@ NC=$'\033[0m' # No Color
 INSTALL_PREFIX="$(pwd)/install"
 ENABLE_CUDA="auto"
 CUDA_ARCH="70;75;80;86;89"
-BUILD_MPI="yes"
+BUILD_MPI="no"
 BUILD_PYTHON="yes"
 BUILD_TESTS="yes"
 NUM_JOBS=8
+PYKOKKOS_BUILD_THREADS=2
 FORCE_REBUILD="no"
-USE_VENV="auto"
+ENABLE_VENV="no"
 VENV_NAME="tpl-venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERNAL_DIR="${SCRIPT_DIR}/external"
@@ -99,25 +100,24 @@ show_help() {
 Usage: ./install.sh [OPTIONS]
 
 Options:
-  --prefix=PATH          Installation prefix (default: ./install)
-  --enable-cuda          Enable CUDA support (default: auto-detect)
-  --disable-cuda         Disable CUDA support
-  --cuda-arch=ARCH       CUDA architecture (default: 70;75;80;86;89)
-  --enable-mpi           Build Open MPI (default: yes)
-  --disable-mpi          Use system MPI instead
-  --skip-python          Skip Python dependencies (pykokkos)
-  --skip-tests           Skip test libraries (GTest, GBench)
-  --use-venv             Use Python virtual environment (recommended)
-  --no-venv              Don't use virtual environment
-  --venv-name=NAME       Virtual environment name (default: tpl-venv)
-  --jobs=N               Number of parallel jobs (default: 8)
-  --force                Force rebuild of all components
-  -h, --help             Show this help message
+  --prefix=PATH                Installation prefix (default: ./install)
+  --enable-cuda                Enable CUDA support (default: auto-detect)
+  --disable-cuda               Disable CUDA support
+  --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
+  --enable-mpi                 Build Open MPI (default: no)
+  --skip-python                Skip Python dependencies (pykokkos)
+  --skip-tests                 Skip test libraries (GTest, GBench)
+  --enable-venv                Use Python virtual environment (default: no)
+  --venv-name=NAME             Virtual environment name (default: tpl-venv)
+  --jobs=N                     Number of parallel jobs (default: 8)
+  --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
+  --force                      Force rebuild of all components
+  -h, --help                   Show this help message
 
 Examples:
   ./install.sh --prefix=\$HOME/local
-  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80 --use-venv
-  ./install.sh --disable-mpi --skip-tests
+  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80 --enable-venv --enable-mpi
+  ./install.sh --skip-tests
 
 EOF
 }
@@ -139,26 +139,23 @@ for arg in "$@"; do
         --enable-mpi)
             BUILD_MPI="yes"
             ;;
-        --disable-mpi)
-            BUILD_MPI="no"
-            ;;
         --skip-python)
             BUILD_PYTHON="no"
             ;;
         --skip-tests)
             BUILD_TESTS="no"
             ;;
-        --use-venv)
-            USE_VENV="yes"
-            ;;
-        --no-venv)
-            USE_VENV="no"
+        --enable-venv)
+            ENABLE_VENV="yes"
             ;;
         --venv-name=*)
             VENV_NAME="${arg#*=}"
             ;;
         --jobs=*)
             NUM_JOBS="${arg#*=}"
+            ;;
+        --pykokkos-build-threads=*)
+            PYKOKKOS_BUILD_THREADS="${arg#*=}"
             ;;
         --force)
             FORCE_REBUILD="yes"
@@ -237,19 +234,8 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     PYTHON_EXEC=$(which python3)
     print_info "Using Python: $PYTHON_EXEC"
 
-    # Decide whether to use venv
-    if [ "$USE_VENV" = "auto" ]; then
-        # Auto-enable venv if requirements.txt exists
-        if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
-            USE_VENV="yes"
-            print_info "Found requirements.txt - will use virtual environment"
-        else
-            USE_VENV="no"
-        fi
-    fi
-
     # Setup virtual environment if requested
-    if [ "$USE_VENV" = "yes" ]; then
+    if [ "$ENABLE_VENV" = "yes" ]; then
         VENV_DIR="${INSTALL_PREFIX}/${VENV_NAME}"
 
         if [ ! -d "${VENV_DIR}" ]; then
@@ -278,7 +264,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
             print_error "pip is not available for Python 3"
             print_error "Install with: sudo apt-get install python3-pip (Ubuntu/Debian)"
             print_error "           or: sudo yum install python3-pip (RHEL/CentOS)"
-            print_error "Or use --use-venv to create isolated environment"
+            print_error "Or use --enable-venv to create isolated environment"
             exit 1
         fi
 
@@ -594,7 +580,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # 1. Install Build Dependencies
     print_info "Installing build dependencies..."
-    if [ "$USE_VENV" != "yes" ]; then
+    if [ "$ENABLE_VENV" != "yes" ]; then
         ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf 2>/dev/null
     else
         ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf
@@ -653,8 +639,8 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     print_info "Installing pykokkos-base..."
 
     # --- LIMIT RAM USAGE ---
-    # Set parallelism to 2 to prevent OOM errors during template instantiation
-    export CMAKE_BUILD_PARALLEL_LEVEL=2
+    # Set parallelism to prevent OOM errors during template instantiation
+    export CMAKE_BUILD_PARALLEL_LEVEL=${PYKOKKOS_BUILD_THREADS}
     print_info "Limiting build parallelism to ${CMAKE_BUILD_PARALLEL_LEVEL} to save RAM"
 
     if [ ! -f "install_base.py" ]; then
@@ -673,7 +659,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     print_info "Installing pykokkos python interface..."
 
     INSTALL_CMD="${PYTHON_EXEC} -m pip install"
-    if [ "$USE_VENV" = "no" ]; then
+    if [ "$ENABLE_VENV" = "no" ]; then
         INSTALL_CMD="${INSTALL_CMD} --break-system-packages"
     fi
     # Use --no-build-isolation to ensure we use the environment we just configured
@@ -685,11 +671,23 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     fi
 
     # 7. Verify
-    if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
-        print_info "pykokkos installed and verified successfully!"
+    if [ "$ENABLE_VENV" = "yes" ]; then
+        print_info "Verifying pykokkos installation within virtual environment..."
+        if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
+          print_info "pykokkos installed and verified successfully!"
+        else
+          print_error "pykokkos installation completed, but 'import pykokkos' failed within virtual environment."
+          exit 1
+        fi
     else
+      print_info "Verifying pykokkos installation..."
+      export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib64:${LD_LIBRARY_PATH}"
+      if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
+        print_info "pykokkos installed and verified successfully!"
+      else
         print_error "pykokkos installation completed, but 'import pykokkos' failed."
         exit 1
+      fi
     fi
 
     # 8. Sanity-check: CudaUVMSpace must be visible if CUDA was enabled
@@ -751,6 +749,7 @@ fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
     CMAKE_ARGS+=(-DADIOS2_USE_Python=ON)
+    CMAKE_ARGS+=(-DPython_EXECUTABLE="${PYTHON_EXEC}")
     print_info "Enabling Python support"
 else
     CMAKE_ARGS+=(-DADIOS2_USE_Python=OFF)
@@ -882,7 +881,7 @@ export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
 EOF
 
 # Add venv activation if used
-if [ "$USE_VENV" = "yes" ]; then
+if [ "$ENABLE_VENV" = "yes" ]; then
     cat >> "${ENV_SCRIPT}" << EOF
 
 # Activate Python virtual environment
@@ -951,7 +950,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # Check if pykokkos was actually installed (either to venv or prefix)
     PYKOKKOS_INSTALLED="no"
-    if [ "$USE_VENV" = "yes" ] && [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" ]; then
+    if [ "$ENABLE_VENV" = "yes" ] && [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" ]; then
         if "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" -c "import pykokkos" 2>/dev/null; then
             PYKOKKOS_INSTALLED="yes"
         fi
@@ -981,7 +980,7 @@ echo ""
 
 if [ "$BUILD_PYTHON" = "no" ]; then
     echo -e "${YELLOW}Note:${NC} Python dependencies were skipped."
-    echo "To add them later, run: ./install.sh --prefix=${INSTALL_PREFIX} --enable-cuda --use-venv"
+    echo "To add them later, run: ./install.sh --prefix=${INSTALL_PREFIX} --enable-cuda --enable-venv"
     echo ""
 fi
 
