@@ -48,17 +48,19 @@ This will build and install all dependencies to `$HOME/local`.
 ./install.sh [OPTIONS]
 
 Options:
-  --prefix=PATH          Installation prefix (default: ./install)
-  --enable-cuda          Enable CUDA support (default: auto-detect)
-  --disable-cuda         Disable CUDA support
-  --cuda-arch=ARCH       CUDA architecture (default: 70,75,80,86)
-  --enable-mpi           Build Open MPI (default: yes)
-  --disable-mpi          Use system MPI instead
-  --skip-python          Skip Python dependencies (pykokkos)
-  --skip-tests           Skip test libraries (GTest, GBench)
-  --jobs=N               Number of parallel jobs (default: 8)
-  --force                Force rebuild of all components
-  -h, --help             Show this help message
+  --prefix=PATH                Installation prefix (default: ./install)
+  --enable-cuda                Enable CUDA support (default: auto-detect)
+  --disable-cuda               Disable CUDA support
+  --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
+  --enable-mpi                 Build Open MPI (default: no)
+  --skip-python                Skip Python dependencies (pykokkos)
+  --skip-tests                 Skip test libraries (GTest, GBench)
+  --enable-venv                Use Python virtual environment (default: no)
+  --venv-name=NAME             Virtual environment name (default: tpl-venv)
+  --jobs=N                     Number of parallel jobs (default: 8)
+  --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
+  --force                      Force rebuild of all components
+  -h, --help                   Show this help message
 ```
 
 ### Smart Rebuilding
