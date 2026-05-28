@@ -19,6 +19,7 @@ ENABLE_CUDA="auto"
 CUDA_ARCH="70;75;80;86;89"
 BUILD_MPI="no"
 BUILD_PYTHON="yes"
+BUILD_PYKOKKOS="yes"
 BUILD_TESTS="yes"
 NUM_JOBS=8
 PYKOKKOS_BUILD_THREADS=2
@@ -105,7 +106,8 @@ Options:
   --disable-cuda               Disable CUDA support
   --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
   --enable-mpi                 Build Open MPI (default: no)
-  --skip-python                Skip Python dependencies (pykokkos)
+  --skip-python                Skip all Python dependencies (kokkos module and pykokkos)
+  --skip-pykokkos              Skip pykokkos Python interface (keep kokkos module only)
   --skip-tests                 Skip test libraries (GTest, GBench)
   --enable-venv                Use Python virtual environment (default: no)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
@@ -141,6 +143,10 @@ for arg in "$@"; do
             ;;
         --skip-python)
             BUILD_PYTHON="no"
+            BUILD_PYKOKKOS="no"
+            ;;
+        --skip-pykokkos)
+            BUILD_PYKOKKOS="no"
             ;;
         --skip-tests)
             BUILD_TESTS="no"
@@ -200,6 +206,7 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
 fi
 echo "Build Open MPI:       $BUILD_MPI"
 echo "Build Python deps:    $BUILD_PYTHON"
+echo "Build pykokkos iface: $BUILD_PYKOKKOS"
 echo "Build test libs:      $BUILD_TESTS"
 echo "Parallel jobs:        $NUM_JOBS"
 echo ""
@@ -230,7 +237,7 @@ if [ "$BUILD_MPI" = "yes" ]; then
 fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
-    check_command python3 || { print_error "python3 required for pykokkos"; exit 1; }
+    check_command python3 || { print_error "python3 required for Python dependencies"; exit 1; }
     PYTHON_EXEC=$(which python3)
     print_info "Using Python: $PYTHON_EXEC"
 
@@ -572,18 +579,28 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 fi
 
 # ==============================================================================
-# Build pykokkos
+# Build pykokkos-base (and optional pykokkos Python interface)
 # ==============================================================================
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
-    print_header "Building pykokkos"
+    print_header "Building pykokkos-base"
 
     # 1. Install Build Dependencies
     print_info "Installing build dependencies..."
     if [ "$ENABLE_VENV" != "yes" ]; then
-        ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf 2>/dev/null
+        if ! ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf; then
+            print_error "Failed to install Python build dependencies for pykokkos"
+            print_error "Tip: rerun manually to inspect full pip diagnostics"
+            print_error "Command: ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf"
+            exit 1
+        fi
     else
-        ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf
+        if ! ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf; then
+            print_error "Failed to install Python build dependencies for pykokkos"
+            print_error "Tip: rerun manually to inspect full pip diagnostics"
+            print_error "Command: ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf"
+            exit 1
+        fi
     fi
 
     cd "${EXTERNAL_DIR}/pykokkos"
@@ -652,42 +669,44 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     # The '--' separates the python setup arguments from the CMake arguments
     if ! ${PYTHON_EXEC} install_base.py install --force -- ${PK_ARGS}; then
         print_error "Failed to install pykokkos-base."
+        print_error "Command: ${PYTHON_EXEC} install_base.py install ${PK_PYTHON_ARGS} -- ${PK_ARGS}"
         exit 1
     fi
 
-    # 6. Install pykokkos (Python Interface)
-    print_info "Installing pykokkos python interface..."
-
-    INSTALL_CMD="${PYTHON_EXEC} -m pip install"
-    if [ "$ENABLE_VENV" = "no" ]; then
-        INSTALL_CMD="${INSTALL_CMD} --break-system-packages"
-    fi
-    # Use --no-build-isolation to ensure we use the environment we just configured
-    INSTALL_CMD="${INSTALL_CMD} --no-build-isolation -v ."
-
-    if ! ${INSTALL_CMD}; then
-        print_error "Failed to install pykokkos python layer."
+    # 6. Verify kokkos module from pykokkos-base
+    print_info "Verifying kokkos module..."
+    if ! ${PYTHON_EXEC} -c "import kokkos"; then
+        print_error "pykokkos-base installation completed, but 'import kokkos' failed."
         exit 1
     fi
+    print_info "kokkos module available"
 
-    # 7. Verify
-    if [ "$ENABLE_VENV" = "yes" ]; then
-        print_info "Verifying pykokkos installation within virtual environment..."
-        if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
-          print_info "pykokkos installed and verified successfully!"
-        else
-          print_error "pykokkos installation completed, but 'import pykokkos' failed within virtual environment."
-          exit 1
+    # 7. Optionally install pykokkos (Python Interface)
+    if [ "$BUILD_PYKOKKOS" = "yes" ]; then
+        print_info "Installing pykokkos python interface..."
+
+        INSTALL_CMD="${PYTHON_EXEC} -m pip install"
+        if [ "$ENABLE_VENV" = "no" ]; then
+            INSTALL_CMD="${INSTALL_CMD} --break-system-packages"
         fi
-    else
-      print_info "Verifying pykokkos installation..."
-      export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib64:${LD_LIBRARY_PATH}"
-      if ${PYTHON_EXEC} -c "import pykokkos" 2>/dev/null; then
+        # Use --no-build-isolation to ensure we use the environment we just configured
+        INSTALL_CMD="${INSTALL_CMD} --no-build-isolation -v ."
+
+        if ! ${INSTALL_CMD}; then
+            print_error "Failed to install pykokkos python layer."
+            print_error "Command: ${INSTALL_CMD}"
+            exit 1
+        fi
+
+        print_info "Verifying pykokkos installation..."
+        export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib64:${LD_LIBRARY_PATH}"
+        if ! ${PYTHON_EXEC} -c "import pykokkos"; then
+            print_error "pykokkos installation completed, but 'import pykokkos' failed."
+            exit 1
+        fi
         print_info "pykokkos installed and verified successfully!"
-      else
-        print_error "pykokkos installation completed, but 'import pykokkos' failed."
-        exit 1
-      fi
+    else
+        print_info "Skipping pykokkos python interface (--skip-pykokkos)"
     fi
 
     # 8. Sanity-check: CudaUVMSpace must be visible if CUDA was enabled
@@ -948,18 +967,22 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         echo "  - pybind11"
     fi
 
-    # Check if pykokkos was actually installed (either to venv or prefix)
-    PYKOKKOS_INSTALLED="no"
-    if [ "$ENABLE_VENV" = "yes" ] && [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" ]; then
-        if "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" -c "import pykokkos" 2>/dev/null; then
+    if [ "$BUILD_PYKOKKOS" = "yes" ]; then
+        # Check if pykokkos was actually installed (either to venv or prefix)
+        PYKOKKOS_INSTALLED="no"
+        if [ "$ENABLE_VENV" = "yes" ] && [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" ]; then
+            if "${INSTALL_PREFIX}/${VENV_NAME}/bin/python" -c "import pykokkos" 2>/dev/null; then
+                PYKOKKOS_INSTALLED="yes"
+            fi
+        elif ${PYTHON_EXEC:-python3} -c "import pykokkos" 2>/dev/null; then
             PYKOKKOS_INSTALLED="yes"
         fi
-    elif ${PYTHON_EXEC:-python3} -c "import pykokkos" 2>/dev/null; then
-        PYKOKKOS_INSTALLED="yes"
-    fi
 
-    if [ "$PYKOKKOS_INSTALLED" = "yes" ]; then
-        echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CudaUVMSpace)" || echo "")"
+        if [ "$PYKOKKOS_INSTALLED" = "yes" ]; then
+            echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CudaUVMSpace)" || echo "")"
+        fi
+    else
+        echo "  - pykokkos (skipped; kokkos python module only)"
     fi
 elif [ "$BUILD_PYTHON" = "no" ]; then
     echo "  - Python dependencies (skipped)"
