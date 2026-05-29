@@ -24,6 +24,7 @@ BUILD_TESTS="yes"
 NUM_JOBS=8
 PYKOKKOS_BUILD_THREADS=2
 FORCE_REBUILD="no"
+PYTHON_PREFIX=""
 ENABLE_VENV="no"
 VENV_NAME="tpl-venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,6 +112,7 @@ Options:
   --skip-tests                 Skip test libraries (GTest, GBench)
   --enable-venv                Use Python virtual environment (default: no)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
+  --python-prefix=PATH         Python installation prefix (default: auto-detect)
   --jobs=N                     Number of parallel jobs (default: 8)
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
   --force                      Force rebuild of all components
@@ -159,6 +161,9 @@ for arg in "$@"; do
             ;;
         --jobs=*)
             NUM_JOBS="${arg#*=}"
+            ;;
+        --python-prefix=*)
+            PYTHON_PREFIX="${arg#*=}"
             ;;
         --pykokkos-build-threads=*)
             PYKOKKOS_BUILD_THREADS="${arg#*=}"
@@ -667,13 +672,33 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # Run the installation script
     # The '--' separates the python setup arguments from the CMake arguments
-    if ! ${PYTHON_EXEC} install_base.py install --force -- ${PK_ARGS}; then
+    PK_PYTHON_ARGS="--force"
+    if [ -n "${PYTHON_PREFIX}" ]; then
+        PK_PYTHON_ARGS="${PK_PYTHON_ARGS} --prefix ${PYTHON_PREFIX}"
+    fi
+    if ! ${PYTHON_EXEC} install_base.py install ${PK_PYTHON_ARGS} -- ${PK_ARGS}; then
         print_error "Failed to install pykokkos-base."
         print_error "Command: ${PYTHON_EXEC} install_base.py install ${PK_PYTHON_ARGS} -- ${PK_ARGS}"
         exit 1
     fi
 
     # 6. Verify kokkos module from pykokkos-base
+    
+    if [ -n "${PYTHON_PREFIX}" ]; then
+       _PY_VER=$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+       _SITE_PKGS="${PYTHON_PREFIX}/lib/python${_PY_VER}/site-packages"
+       export PYTHONPATH="${_SITE_PKGS}:${PYTHONPATH}"
+       # pykokkos-base installs as an egg; .pth files in PYTHONPATH dirs are not
+       # processed by Python, so we must add the egg directory explicitly.
+       _PK_EGG=$(find "${_SITE_PKGS}" -maxdepth 1 -name "pykokkos_base-*.egg" -type d 2>/dev/null | head -1)
+       if [ -n "${_PK_EGG}" ]; then
+           export PYTHONPATH="${_PK_EGG}:${PYTHONPATH}"
+           print_info "Added egg ${_PK_EGG} to PYTHONPATH for kokkos module discovery"
+       else
+           print_info "Added ${_SITE_PKGS} to PYTHONPATH for kokkos module discovery"
+       fi
+    fi
+
     print_info "Verifying kokkos module..."
     if ! ${PYTHON_EXEC} -c "import kokkos"; then
         print_error "pykokkos-base installation completed, but 'import kokkos' failed."
