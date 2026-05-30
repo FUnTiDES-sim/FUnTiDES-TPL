@@ -523,6 +523,7 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_CONSTEXPR=ON
         -DKokkos_ENABLE_CUDA_UVM=ON
+        -DKokkos_ENABLE_DEPRECATED_CODE_4=ON  # allow to compile kokkos version > 5
         -DKokkos_ARCH_${KOKKOS_ARCH_NAME}=ON
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
     )
@@ -783,6 +784,8 @@ CMAKE_ARGS=(
 if [ "$BUILD_MPI" = "yes" ] || command -v mpirun &> /dev/null; then
     CMAKE_ARGS+=(-DADIOS2_USE_MPI=ON)
     print_info "Enabling MPI support"
+else
+    print_info "Disable MPI support"
 fi
 
 # Note: ADIOS2_USE_CUDA is incompatible with ADIOS2_USE_Kokkos
