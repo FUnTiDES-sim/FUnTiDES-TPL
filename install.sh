@@ -566,9 +566,13 @@ CMAKE_ARGS=(
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
     # KOKKOS_ARCH_NAME is resolved from CUDA_ARCH at startup
-    # Kokkos+CUDA requires nvcc_wrapper (or clang) as the C++ compiler
+    # Kokkos+CUDA requires nvcc_wrapper (or clang) as the C++ compiler.
+    # Use a copy in the install tree: the path is recorded in the installed
+    # Kokkos config, which must not depend on this source tree.
+    mkdir -p "${INSTALL_PREFIX}/bin"
+    cp "${EXTERNAL_DIR}/kokkos/bin/nvcc_wrapper" "${INSTALL_PREFIX}/bin/nvcc_wrapper"
     CMAKE_ARGS+=(
-        -DCMAKE_CXX_COMPILER="${EXTERNAL_DIR}/kokkos/bin/nvcc_wrapper"
+        -DCMAKE_CXX_COMPILER="${INSTALL_PREFIX}/bin/nvcc_wrapper"
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_CONSTEXPR=ON
         -DKokkos_ENABLE_CUDA_UVM=ON
@@ -988,21 +992,43 @@ cat > "${ENV_SCRIPT}" << 'EOF'
 EOF
 
 echo "# Usage: source ${INSTALL_PREFIX}/setup_env.sh" >> "${ENV_SCRIPT}"
+echo "# It can be sourced several times without duplicating entries." >> "${ENV_SCRIPT}"
 echo "" >> "${ENV_SCRIPT}"
 
-# Add PATH and library paths
+# Add PATH and library paths (prepended only once, no empty entry)
+cat >> "${ENV_SCRIPT}" << 'EOF'
+# Prepend $2 to the variable named $1, unless already present
+_tpl_prepend() {
+    case ":${!1}:" in
+        *":$2:"*) ;;
+        *) export "$1=$2${!1:+:${!1}}" ;;
+    esac
+}
+
+EOF
+if [ "$ENABLE_CUDA" = "yes" ] && [ -n "${CUDA_PATH}" ]; then
+    # nvcc_wrapper (used by Kokkos consumers) needs nvcc in PATH
+    echo "_tpl_prepend PATH \"${CUDA_PATH}/bin\"" >> "${ENV_SCRIPT}"
+fi
 cat >> "${ENV_SCRIPT}" << EOF
-export PATH="${INSTALL_PREFIX}/bin:\${PATH}"
-export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
-export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
+export TPL_INSTALL_PREFIX="${INSTALL_PREFIX}"
+_tpl_prepend PATH "${INSTALL_PREFIX}/bin"
+_tpl_prepend LD_LIBRARY_PATH "${INSTALL_PREFIX}/lib"
+EOF
+if [ -d "${INSTALL_PREFIX}/lib64" ]; then
+    echo "_tpl_prepend LD_LIBRARY_PATH \"${INSTALL_PREFIX}/lib64\"" >> "${ENV_SCRIPT}"
+fi
+cat >> "${ENV_SCRIPT}" << EOF
+_tpl_prepend CMAKE_PREFIX_PATH "${INSTALL_PREFIX}"
 EOF
 
 # Add venv activation if used
 if [ "$ENABLE_VENV" = "yes" ]; then
     cat >> "${ENV_SCRIPT}" << EOF
 
-# Activate Python virtual environment
-if [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/activate" ]; then
+# Activate Python virtual environment (once: re-activating resets PATH)
+if [ "\${VIRTUAL_ENV:-}" != "${INSTALL_PREFIX}/${VENV_NAME}" ] && \\
+   [ -f "${INSTALL_PREFIX}/${VENV_NAME}/bin/activate" ]; then
     source "${INSTALL_PREFIX}/${VENV_NAME}/bin/activate"
     echo "Python virtual environment activated"
 fi
@@ -1013,11 +1039,13 @@ elif [ "$BUILD_PYTHON" = "yes" ]; then
 
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 EOF
-    echo "export PYTHONPATH=\"${INSTALL_PREFIX}/lib/python\${PYTHON_VERSION}/site-packages:\${PYTHONPATH}\"" >> "${ENV_SCRIPT}"
+    echo "_tpl_prepend PYTHONPATH \"${INSTALL_PREFIX}/lib/python\${PYTHON_VERSION}/site-packages\"" >> "${ENV_SCRIPT}"
 fi
 
 # Add footer
 cat >> "${ENV_SCRIPT}" << EOF
+
+unset -f _tpl_prepend
 
 echo "TPL environment configured!"
 echo "Installation prefix: ${INSTALL_PREFIX}"

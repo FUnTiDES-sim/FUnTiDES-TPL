@@ -162,9 +162,12 @@ The installation creates a `setup_env.sh` script in your installation directory:
 # Load TPL environment (do this once per terminal session)
 source /path/to/install/setup_env.sh
 
-# Or use the provided standalone script
-source setup_tpl_env.sh /path/to/install
+# Or use the standalone script of this repository
+source FUnTiDES-TPL/setup_env.sh /path/to/install
 ```
+
+Both scripts can be sourced several times: entries already present are not added again.
+The generated script also activates the virtual environment when `--enable-venv` was used.
 
 This sets:
 - `PATH` - for executables (mpirun, etc.)
@@ -179,13 +182,10 @@ To automatically load TPL environment in every new terminal, add to `~/.bashrc` 
 
 ```bash
 # TPL Environment
-export TPL_PREFIX="$HOME/test"  # Change to your install path
-export PATH="${TPL_PREFIX}/bin:${PATH}"
-export LD_LIBRARY_PATH="${TPL_PREFIX}/lib:${LD_LIBRARY_PATH}"
-export CMAKE_PREFIX_PATH="${TPL_PREFIX}:${CMAKE_PREFIX_PATH}"
+source /path/to/install/setup_env.sh > /dev/null
 ```
 
-See `bashrc_snippet.sh` for a complete example.
+See `bash_rc_snippet.sh` for a complete example.
 
 ### Option 3: Manual Export (Quick Testing)
 

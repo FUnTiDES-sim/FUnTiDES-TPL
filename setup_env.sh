@@ -5,13 +5,14 @@
 # This script sets up all environment variables needed to use the TPL libraries
 #
 # Usage:
-#   source setup_tpl_env.sh [INSTALL_PREFIX]
+#   source setup_env.sh [INSTALL_PREFIX]
 #
 # Example:
-#   source setup_tpl_env.sh $HOME/test
-#   source setup_tpl_env.sh /opt/tpl
+#   source setup_env.sh $HOME/test
+#   source setup_env.sh /opt/tpl
 #
 # If no prefix is provided, it defaults to ./install
+# It can be sourced several times without duplicating entries.
 # ============================================================================
 
 # Determine installation prefix
@@ -29,7 +30,7 @@ fi
 TPL_PREFIX="$(cd "${TPL_PREFIX}" 2>/dev/null && pwd)" || {
     echo "ERROR: Installation directory not found: $1"
     echo "Please provide a valid installation prefix:"
-    echo "  source setup_tpl_env.sh /path/to/install"
+    echo "  source setup_env.sh /path/to/install"
     return 1
 }
 
@@ -44,25 +45,36 @@ fi
 # Set up environment variables
 # ============================================================================
 
+# Prepend $2 to the variable named $1, unless already present (no empty entry)
+_tpl_prepend() {
+    case ":${!1}:" in
+        *":$2:"*) ;;
+        *) export "$1=$2${!1:+:${!1}}" ;;
+    esac
+}
+
 # Executables (mpirun, mpicc, etc.)
-export PATH="${TPL_PREFIX}/bin:${PATH}"
+_tpl_prepend PATH "${TPL_PREFIX}/bin"
 
 # Shared libraries
-export LD_LIBRARY_PATH="${TPL_PREFIX}/lib:${TPL_PREFIX}/lib64:${LD_LIBRARY_PATH}"
+[ -d "${TPL_PREFIX}/lib64" ] && _tpl_prepend LD_LIBRARY_PATH "${TPL_PREFIX}/lib64"
+_tpl_prepend LD_LIBRARY_PATH "${TPL_PREFIX}/lib"
 
 # CMake package configuration files
-export CMAKE_PREFIX_PATH="${TPL_PREFIX}:${CMAKE_PREFIX_PATH}"
+_tpl_prepend CMAKE_PREFIX_PATH "${TPL_PREFIX}"
 
 # pkg-config
-export PKG_CONFIG_PATH="${TPL_PREFIX}/lib/pkgconfig:${TPL_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH}"
+[ -d "${TPL_PREFIX}/lib64/pkgconfig" ] && _tpl_prepend PKG_CONFIG_PATH "${TPL_PREFIX}/lib64/pkgconfig"
+[ -d "${TPL_PREFIX}/lib/pkgconfig" ] && _tpl_prepend PKG_CONFIG_PATH "${TPL_PREFIX}/lib/pkgconfig"
 
 # Python packages (if installed)
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
 if [ -n "$PYTHON_VERSION" ]; then
     if [ -d "${TPL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages" ]; then
-        export PYTHONPATH="${TPL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages:${PYTHONPATH}"
+        _tpl_prepend PYTHONPATH "${TPL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages"
     fi
 fi
+unset -f _tpl_prepend
 
 # Store the prefix for reference
 export TPL_INSTALL_PREFIX="${TPL_PREFIX}"
