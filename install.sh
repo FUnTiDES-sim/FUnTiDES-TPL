@@ -16,7 +16,7 @@ NC=$'\033[0m' # No Color
 # Default values
 INSTALL_PREFIX="$(pwd)/install"
 ENABLE_CUDA="auto"
-CUDA_ARCH="70;75;80;86;89"
+CUDA_ARCH=""   # empty = auto-detect from nvidia-smi
 BUILD_MPI="no"
 BUILD_PYTHON="yes"
 BUILD_PYKOKKOS="yes"
@@ -105,12 +105,15 @@ Options:
   --prefix=PATH                Installation prefix (default: ./install)
   --enable-cuda                Enable CUDA support (default: auto-detect)
   --disable-cuda               Disable CUDA support
-  --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
+  --cuda-arch=ARCH             GPU compute capability, single value, e.g. 89 for
+                               RTX 40xx (default: auto-detect with nvidia-smi)
   --enable-mpi                 Build Open MPI (default: no)
+  --disable-mpi                Do not build Open MPI, use system MPI (default)
   --skip-python                Skip all Python dependencies (kokkos module and pykokkos)
   --skip-pykokkos              Skip pykokkos Python interface (keep kokkos module only)
   --skip-tests                 Skip test libraries (GTest, GBench)
   --enable-venv                Use Python virtual environment (default: no)
+  --no-venv, --disable-venv    Do not use a virtual environment (default)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
   --python-prefix=PATH         Python installation prefix (default: auto-detect)
   --jobs=N                     Number of parallel jobs (default: 8)
@@ -143,6 +146,9 @@ for arg in "$@"; do
         --enable-mpi)
             BUILD_MPI="yes"
             ;;
+        --disable-mpi)
+            BUILD_MPI="no"
+            ;;
         --skip-python)
             BUILD_PYTHON="no"
             BUILD_PYKOKKOS="no"
@@ -155,6 +161,9 @@ for arg in "$@"; do
             ;;
         --enable-venv)
             ENABLE_VENV="yes"
+            ;;
+        --no-venv|--disable-venv)
+            ENABLE_VENV="no"
             ;;
         --venv-name=*)
             VENV_NAME="${arg#*=}"
@@ -194,6 +203,52 @@ if [ "$ENABLE_CUDA" = "auto" ]; then
     else
         ENABLE_CUDA="no"
         print_warning "CUDA not detected, building without GPU support"
+    fi
+fi
+
+# ==============================================================================
+# Resolve the GPU architecture (Kokkos supports a single one)
+# ==============================================================================
+
+# Map a compute capability (e.g. 89) to the Kokkos architecture keyword
+kokkos_arch_name() {
+    case "$1" in
+        60)  echo "PASCAL60" ;;
+        61)  echo "PASCAL61" ;;
+        70)  echo "VOLTA70" ;;
+        72)  echo "VOLTA72" ;;
+        75)  echo "TURING75" ;;
+        80)  echo "AMPERE80" ;;
+        86)  echo "AMPERE86" ;;
+        87)  echo "AMPERE87" ;;
+        89)  echo "ADA89" ;;
+        90)  echo "HOPPER90" ;;
+        100) echo "BLACKWELL100" ;;
+        120) echo "BLACKWELL120" ;;
+        *)   return 1 ;;
+    esac
+}
+
+if [ "$ENABLE_CUDA" = "yes" ]; then
+    if [ -z "$CUDA_ARCH" ]; then
+        if command -v nvidia-smi &> /dev/null; then
+            # compute_cap is reported as e.g. "8.9" -> "89"
+            CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. ')
+        fi
+        if [ -z "$CUDA_ARCH" ]; then
+            print_error "Could not detect the GPU architecture; pass it with --cuda-arch=NN (e.g. 80, 89, 90)"
+            exit 1
+        fi
+        print_info "Detected GPU architecture: ${CUDA_ARCH}"
+    fi
+    if [[ "$CUDA_ARCH" == *";"* ]]; then
+        print_warning "Kokkos supports a single GPU architecture: using ${CUDA_ARCH%%;*} from '${CUDA_ARCH}'"
+        CUDA_ARCH="${CUDA_ARCH%%;*}"
+    fi
+    if ! KOKKOS_ARCH_NAME=$(kokkos_arch_name "$CUDA_ARCH"); then
+        print_error "Unsupported CUDA architecture: ${CUDA_ARCH}"
+        print_error "Supported: 60 61 70 72 75 80 86 87 89 90 100 120"
+        exit 1
     fi
 fi
 
@@ -510,16 +565,10 @@ CMAKE_ARGS=(
 )
 
 if [ "$ENABLE_CUDA" = "yes" ]; then
-    # Map the numeric arch to the Kokkos keyword
-    case "${CUDA_ARCH}" in
-        89) KOKKOS_ARCH_NAME="ADA89" ;;
-        80) KOKKOS_ARCH_NAME="AMPERE80" ;;
-        86) KOKKOS_ARCH_NAME="AMPERE86" ;;
-        70) KOKKOS_ARCH_NAME="VOLTA70" ;;
-        *)  KOKKOS_ARCH_NAME="${CUDA_ARCH}" ;; # Fallback
-    esac
-
+    # KOKKOS_ARCH_NAME is resolved from CUDA_ARCH at startup
+    # Kokkos+CUDA requires nvcc_wrapper (or clang) as the C++ compiler
     CMAKE_ARGS+=(
+        -DCMAKE_CXX_COMPILER="${EXTERNAL_DIR}/kokkos/bin/nvcc_wrapper"
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_CONSTEXPR=ON
         -DKokkos_ENABLE_CUDA_UVM=ON
@@ -550,7 +599,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # Check if already installed and whether to rebuild
     REBUILD_PYBIND11="no"
-    if is_installed "pybind11" "lib/cmake/pybind11/pybind11Config.cmake"; then
+    if is_installed "pybind11" "share/cmake/pybind11/pybind11Config.cmake"; then
         print_info "pybind11 already installed"
         if ask_rebuild "pybind11"; then
             REBUILD_PYBIND11="yes"
@@ -590,6 +639,39 @@ fi
 if [ "$BUILD_PYTHON" = "yes" ]; then
     print_header "Building pykokkos-base"
 
+    # Make modules installed under --python-prefix importable (no-op otherwise)
+    setup_python_prefix_path() {
+        if [ -n "${PYTHON_PREFIX}" ]; then
+            local _py_ver _site_pkgs _pk_egg
+            _py_ver=$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            _site_pkgs="${PYTHON_PREFIX}/lib/python${_py_ver}/site-packages"
+            export PYTHONPATH="${_site_pkgs}:${PYTHONPATH}"
+            # pykokkos-base installs as an egg; .pth files in PYTHONPATH dirs are not
+            # processed by Python, so we must add the egg directory explicitly.
+            _pk_egg=$(find "${_site_pkgs}" -maxdepth 1 -name "pykokkos_base-*.egg" -type d 2>/dev/null | head -1)
+            if [ -n "${_pk_egg}" ]; then
+                export PYTHONPATH="${_pk_egg}:${PYTHONPATH}"
+                print_info "Added egg ${_pk_egg} to PYTHONPATH for kokkos module discovery"
+            else
+                print_info "Added ${_site_pkgs} to PYTHONPATH for kokkos module discovery"
+            fi
+        fi
+    }
+    setup_python_prefix_path
+    export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:${INSTALL_PREFIX}/lib64:${LD_LIBRARY_PATH}"
+
+    # Check if already installed and whether to rebuild (the build is long)
+    REBUILD_PKBASE="yes"
+    if [ "$FORCE_REBUILD" != "yes" ] && ${PYTHON_EXEC} -c "import kokkos" &> /dev/null; then
+        print_info "pykokkos-base (kokkos module) already installed"
+        if ask_rebuild "pykokkos-base"; then
+            rm -rf "${EXTERNAL_DIR}/pykokkos/base/_skbuild"
+        else
+            REBUILD_PKBASE="no"
+            print_info "Skipping pykokkos-base build"
+        fi
+    fi
+
     # 1. Install Build Dependencies
     print_info "Installing build dependencies..."
     if [ "$ENABLE_VENV" != "yes" ]; then
@@ -609,6 +691,8 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     fi
 
     cd "${EXTERNAL_DIR}/pykokkos"
+
+    if [ "$REBUILD_PKBASE" = "yes" ]; then
 
     # 2. Configure Environment
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
@@ -630,28 +714,14 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
 
     # 4. Handle CUDA Architecture
     if [ "$ENABLE_CUDA" = "yes" ]; then
-        # Parse the CUDA_ARCH list.
-        IFS=';' read -ra ARCH_ARRAY <<< "$CUDA_ARCH"
-        FIRST_ARCH="${ARCH_ARRAY[0]}"
-
-        # Map architecture number to the specific Kokkos flag
-        case "$FIRST_ARCH" in
-            70) K_ARCH_FLAG="-DKokkos_ARCH_VOLTA70=ON" ;;
-            75) K_ARCH_FLAG="-DKokkos_ARCH_TURING75=ON" ;;
-            80) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
-            86) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE86=ON" ;;
-            89) K_ARCH_FLAG="-DKokkos_ARCH_ADA89=ON" ;;
-            90) K_ARCH_FLAG="-DKokkos_ARCH_HOPPER90=ON" ;;
-            *)  K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
-        esac
-
-        PK_ARGS="${PK_ARGS} -DENABLE_CUDA=ON ${K_ARCH_FLAG} -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
+        # Same single GPU architecture as Kokkos (resolved at startup)
+        PK_ARGS="${PK_ARGS} -DENABLE_CUDA=ON -DKokkos_ARCH_${KOKKOS_ARCH_NAME}=ON -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}"
         # Expose kokkos.CudaUVMSpace to Python. In Kokkos 4+, Kokkos::SharedSpace
         # resolves to CudaUVMSpace on CUDA automatically (no flag needed in Kokkos).
         # This flag tells pykokkos-base to compile the Python bindings for that
         # view type so views can cross the pybind11 boundary without a type error.
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA_UVM=ON"
-        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, UVM enabled)"
+        print_info "Configuring PyKokkos-base for CUDA (Arch: ${KOKKOS_ARCH_NAME}, UVM enabled)"
     else
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA=OFF -DENABLE_OPENMP=ON"
         print_info "Configuring PyKokkos-base for CPU (OpenMP)"
@@ -682,23 +752,11 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         exit 1
     fi
 
-    # 6. Verify kokkos module from pykokkos-base
-    
-    if [ -n "${PYTHON_PREFIX}" ]; then
-       _PY_VER=$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-       _SITE_PKGS="${PYTHON_PREFIX}/lib/python${_PY_VER}/site-packages"
-       export PYTHONPATH="${_SITE_PKGS}:${PYTHONPATH}"
-       # pykokkos-base installs as an egg; .pth files in PYTHONPATH dirs are not
-       # processed by Python, so we must add the egg directory explicitly.
-       _PK_EGG=$(find "${_SITE_PKGS}" -maxdepth 1 -name "pykokkos_base-*.egg" -type d 2>/dev/null | head -1)
-       if [ -n "${_PK_EGG}" ]; then
-           export PYTHONPATH="${_PK_EGG}:${PYTHONPATH}"
-           print_info "Added egg ${_PK_EGG} to PYTHONPATH for kokkos module discovery"
-       else
-           print_info "Added ${_SITE_PKGS} to PYTHONPATH for kokkos module discovery"
-       fi
-    fi
+    # Pick up the egg created by the fresh install
+    setup_python_prefix_path
+    fi  # End of pykokkos-base rebuild check
 
+    # 6. Verify kokkos module from pykokkos-base
     print_info "Verifying kokkos module..."
     if ! ${PYTHON_EXEC} -c "import kokkos"; then
         print_error "pykokkos-base installation completed, but 'import kokkos' failed."
@@ -707,7 +765,17 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     print_info "kokkos module available"
 
     # 7. Optionally install pykokkos (Python Interface)
-    if [ "$BUILD_PYKOKKOS" = "yes" ]; then
+    REBUILD_PYKOKKOS="$BUILD_PYKOKKOS"
+    if [ "$BUILD_PYKOKKOS" = "yes" ] && [ "$FORCE_REBUILD" != "yes" ] \
+        && ${PYTHON_EXEC} -c "import pykokkos" &> /dev/null; then
+        print_info "pykokkos already installed"
+        if ! ask_rebuild "pykokkos"; then
+            REBUILD_PYKOKKOS="no"
+            print_info "Skipping pykokkos install"
+        fi
+    fi
+
+    if [ "$REBUILD_PYKOKKOS" = "yes" ]; then
         print_info "Installing pykokkos python interface..."
 
         INSTALL_CMD="${PYTHON_EXEC} -m pip install"
@@ -730,7 +798,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
             exit 1
         fi
         print_info "pykokkos installed and verified successfully!"
-    else
+    elif [ "$BUILD_PYKOKKOS" = "no" ]; then
         print_info "Skipping pykokkos python interface (--skip-pykokkos)"
     fi
 
@@ -794,6 +862,11 @@ fi
 if [ "$BUILD_PYTHON" = "yes" ]; then
     CMAKE_ARGS+=(-DADIOS2_USE_Python=ON)
     CMAKE_ARGS+=(-DPython_EXECUTABLE="${PYTHON_EXEC}")
+    # ADIOS2 guesses a wrong (duplicated) python dir inside a venv: set it explicitly
+    if [ "$ENABLE_VENV" = "yes" ]; then
+        _PY_VER=$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        CMAKE_ARGS+=(-DCMAKE_INSTALL_PYTHONDIR="${VENV_DIR}/lib/python${_PY_VER}/site-packages")
+    fi
     print_info "Enabling Python support"
 else
     CMAKE_ARGS+=(-DADIOS2_USE_Python=OFF)
@@ -988,7 +1061,7 @@ elif [ "$BUILD_MPI" = "no" ]; then
 fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
-    if [ -f "${INSTALL_PREFIX}/lib/cmake/pybind11/pybind11Config.cmake" ]; then
+    if [ -f "${INSTALL_PREFIX}/share/cmake/pybind11/pybind11Config.cmake" ]; then
         echo "  - pybind11"
     fi
 

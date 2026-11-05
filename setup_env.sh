@@ -104,7 +104,7 @@ if [ -f "${TPL_PREFIX}/lib/cmake/adios2/adios2-config.cmake" ]; then
     echo "  ✓ ADIOS2"
 fi
 
-if [ -f "${TPL_PREFIX}/lib/cmake/pybind11/pybind11Config.cmake" ]; then
+if [ -f "${TPL_PREFIX}/share/cmake/pybind11/pybind11Config.cmake" ]; then
     echo "  ✓ pybind11"
 fi
 

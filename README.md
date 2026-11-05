@@ -51,12 +51,17 @@ Options:
   --prefix=PATH                Installation prefix (default: ./install)
   --enable-cuda                Enable CUDA support (default: auto-detect)
   --disable-cuda               Disable CUDA support
-  --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
+  --cuda-arch=ARCH             GPU compute capability, single value, e.g. 89 for
+                               RTX 40xx (default: auto-detect with nvidia-smi)
   --enable-mpi                 Build Open MPI (default: no)
-  --skip-python                Skip Python dependencies (pykokkos)
+  --disable-mpi                Do not build Open MPI, use system MPI (default)
+  --skip-python                Skip all Python dependencies (kokkos module and pykokkos)
+  --skip-pykokkos              Skip pykokkos Python interface (keep kokkos module only)
   --skip-tests                 Skip test libraries (GTest, GBench)
   --enable-venv                Use Python virtual environment (default: no)
+  --no-venv, --disable-venv    Do not use a virtual environment (default)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
+  --python-prefix=PATH         Python installation prefix (default: auto-detect)
   --jobs=N                     Number of parallel jobs (default: 8)
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
   --force                      Force rebuild of all components
