@@ -624,6 +624,10 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     PK_ARGS="${PK_ARGS} -Dpybind11_ROOT=${INSTALL_PREFIX}"
     PK_ARGS="${PK_ARGS} -DENABLE_INTERNAL_KOKKOS=OFF"
     PK_ARGS="${PK_ARGS} -DKokkos_ROOT=${INSTALL_PREFIX}"
+    # The scikit-build cache (external/pykokkos/base/_skbuild) is shared by every prefix and keeps
+    # the *_DIR found by a previous build, which win over *_ROOT: pass them explicitly.
+    PK_ARGS="${PK_ARGS} -DKokkos_DIR=${INSTALL_PREFIX}/lib/cmake/Kokkos"
+    PK_ARGS="${PK_ARGS} -Dpybind11_DIR=${INSTALL_PREFIX}/share/cmake/pybind11"
 
     # Feature flags (Must match how you built Kokkos)
     PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=4"

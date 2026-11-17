@@ -53,6 +53,10 @@ export LD_LIBRARY_PATH="${TPL_PREFIX}/lib:${TPL_PREFIX}/lib64:${LD_LIBRARY_PATH}
 # CMake package configuration files
 export CMAKE_PREFIX_PATH="${TPL_PREFIX}:${CMAKE_PREFIX_PATH}"
 
+# Used by find_package(Kokkos) and find_package(pybind11), e.g. by pip install of pyfuntides
+export Kokkos_ROOT="${TPL_PREFIX}"
+export pybind11_ROOT="${TPL_PREFIX}"
+
 # pkg-config
 export PKG_CONFIG_PATH="${TPL_PREFIX}/lib/pkgconfig:${TPL_PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH}"
 
