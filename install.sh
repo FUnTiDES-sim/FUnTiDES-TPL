@@ -16,6 +16,7 @@ NC=$'\033[0m' # No Color
 # Default values
 INSTALL_PREFIX="$(pwd)/install"
 ENABLE_CUDA="auto"
+ENABLE_CUDA_UVM="no"
 CUDA_ARCH="70;75;80;86;89"
 BUILD_MPI="no"
 BUILD_PYTHON="yes"
@@ -105,6 +106,7 @@ Options:
   --prefix=PATH                Installation prefix (default: ./install)
   --enable-cuda                Enable CUDA support (default: auto-detect)
   --disable-cuda               Disable CUDA support
+  --enable-cuda-uvm            Build Kokkos with CUDA UVM as default memory space (default: no)
   --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
   --enable-mpi                 Build Open MPI (default: no)
   --skip-python                Skip all Python dependencies (kokkos module and pykokkos)
@@ -136,6 +138,9 @@ for arg in "$@"; do
             ;;
         --disable-cuda)
             ENABLE_CUDA="no"
+            ;;
+        --enable-cuda-uvm)
+            ENABLE_CUDA_UVM="yes"
             ;;
         --cuda-arch=*)
             CUDA_ARCH="${arg#*=}"
@@ -208,6 +213,7 @@ echo "External directory:   $EXTERNAL_DIR"
 echo "CUDA support:         $ENABLE_CUDA"
 if [ "$ENABLE_CUDA" = "yes" ]; then
     echo "CUDA architectures:   $CUDA_ARCH"
+    echo "CUDA UVM:             $ENABLE_CUDA_UVM"
 fi
 echo "Build Open MPI:       $BUILD_MPI"
 echo "Build Python deps:    $BUILD_PYTHON"
@@ -522,11 +528,11 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
     CMAKE_ARGS+=(
         -DKokkos_ENABLE_CUDA=ON
         -DKokkos_ENABLE_CUDA_CONSTEXPR=ON
-        -DKokkos_ENABLE_CUDA_UVM=ON
+        -DKokkos_ENABLE_CUDA_UVM=$([ "$ENABLE_CUDA_UVM" = "yes" ] && echo ON || echo OFF)
         -DKokkos_ARCH_${KOKKOS_ARCH_NAME}=ON
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}"
     )
-    print_info "Enabling CUDA support with architecture: ${KOKKOS_ARCH_NAME}"
+    print_info "Enabling CUDA support with architecture: ${KOKKOS_ARCH_NAME} (UVM: ${ENABLE_CUDA_UVM})"
 fi
 
 print_info "Configuring Kokkos..."
@@ -651,7 +657,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         # This flag tells pykokkos-base to compile the Python bindings for that
         # view type so views can cross the pybind11 boundary without a type error.
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA_UVM=ON"
-        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, UVM enabled)"
+        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, CudaUVMSpace views exposed)"
     else
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA=OFF -DENABLE_OPENMP=ON"
         print_info "Configuring PyKokkos-base for CPU (OpenMP)"
@@ -1004,7 +1010,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         fi
 
         if [ "$PYKOKKOS_INSTALLED" = "yes" ]; then
-            echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CudaUVMSpace)" || echo "")"
+            echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(CudaSpace and CudaUVMSpace views)" || echo "")"
         fi
     else
         echo "  - pykokkos (skipped; kokkos python module only)"
