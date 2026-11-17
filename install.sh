@@ -516,6 +516,9 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
         80) KOKKOS_ARCH_NAME="AMPERE80" ;;
         86) KOKKOS_ARCH_NAME="AMPERE86" ;;
         70) KOKKOS_ARCH_NAME="VOLTA70" ;;
+        75) KOKKOS_ARCH_NAME="TURING75" ;;
+        90) KOKKOS_ARCH_NAME="HOPPER90" ;;
+        100) KOKKOS_ARCH_NAME="BLACKWELL100" ;;
         *)  KOKKOS_ARCH_NAME="${CUDA_ARCH}" ;; # Fallback
     esac
 
@@ -641,6 +644,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
             80) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
             86) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE86=ON" ;;
             89) K_ARCH_FLAG="-DKokkos_ARCH_ADA89=ON" ;;
+            100) K_ARCH_FLAG="-DKokkos_ARCH_BLACKWELL100=ON" ;;
             90) K_ARCH_FLAG="-DKokkos_ARCH_HOPPER90=ON" ;;
             *)  K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
         esac
