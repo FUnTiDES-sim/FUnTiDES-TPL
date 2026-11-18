@@ -615,7 +615,17 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         fi
     fi
 
-    cd "${EXTERNAL_DIR}/pykokkos"
+    # Build from a copy of the sources: scikit-build writes _skbuild/, dist/ and the egg-info next to
+    # setup.py, which would be shared by every build made from this checkout (e.g. other platforms).
+    PYKOKKOS_BUILD_SRC="${BUILD_DIR}/pykokkos"
+    mkdir -p "${PYKOKKOS_BUILD_SRC}"
+    if command -v rsync &> /dev/null; then
+        rsync -a --exclude=.git --exclude=_skbuild --exclude=dist --exclude='*.egg-info' \
+            "${EXTERNAL_DIR}/pykokkos/" "${PYKOKKOS_BUILD_SRC}/"
+    else
+        cp -au "${EXTERNAL_DIR}/pykokkos/." "${PYKOKKOS_BUILD_SRC}/"
+    fi
+    cd "${PYKOKKOS_BUILD_SRC}"
 
     # 2. Configure Environment
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
