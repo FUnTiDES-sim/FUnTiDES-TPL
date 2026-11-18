@@ -652,12 +652,10 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         esac
 
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA=ON ${K_ARCH_FLAG} -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
-        # Expose kokkos.CudaUVMSpace to Python. In Kokkos 4+, Kokkos::SharedSpace
-        # resolves to CudaUVMSpace on CUDA automatically (no flag needed in Kokkos).
-        # This flag tells pykokkos-base to compile the Python bindings for that
-        # view type so views can cross the pybind11 boundary without a type error.
-        PK_ARGS="${PK_ARGS} -DENABLE_CUDA_UVM=ON"
-        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, CudaUVMSpace views exposed)"
+        # kokkos.CudaUVMSpace is exposed only if Kokkos itself was built with
+        # Kokkos_ENABLE_CUDA_UVM=ON: pykokkos-base reads KOKKOS_ENABLE_CUDA_UVM
+        # from the installed KokkosCore_config.h (no pykokkos-base flag for it).
+        print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, UVM: ${ENABLE_CUDA_UVM})"
     else
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA=OFF -DENABLE_OPENMP=ON"
         print_info "Configuring PyKokkos-base for CPU (OpenMP)"
@@ -740,11 +738,11 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         print_info "Skipping pykokkos python interface (--skip-pykokkos)"
     fi
 
-    # 8. Sanity-check: CudaUVMSpace must be visible if CUDA was enabled
-    if [ "$ENABLE_CUDA" = "yes" ]; then
+    # 8. Sanity-check: CudaUVMSpace must be visible if Kokkos was built with UVM
+    if [ "$ENABLE_CUDA" = "yes" ] && [ "$ENABLE_CUDA_UVM" = "yes" ]; then
         if ! ${PYTHON_EXEC} -c "import kokkos; kokkos.CudaUVMSpace" 2>/dev/null; then
             print_error "kokkos.CudaUVMSpace is not available after installation."
-            print_error "pykokkos-base was not compiled with -DENABLE_CUDA_UVM=ON."
+            print_error "Kokkos was not built with -DKokkos_ENABLE_CUDA_UVM=ON."
             exit 1
         fi
         print_info "Verified: kokkos.CudaUVMSpace is available"
@@ -1010,7 +1008,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         fi
 
         if [ "$PYKOKKOS_INSTALLED" = "yes" ]; then
-            echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(CudaSpace and CudaUVMSpace views)" || echo "")"
+            echo "  - pykokkos $([ "$ENABLE_CUDA" = "yes" ] && { [ "$ENABLE_CUDA_UVM" = "yes" ] && echo "(CudaSpace and CudaUVMSpace views)" || echo "(CudaSpace views)"; } || echo "")"
         fi
     else
         echo "  - pykokkos (skipped; kokkos python module only)"
