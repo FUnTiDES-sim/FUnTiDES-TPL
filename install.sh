@@ -29,7 +29,7 @@ ENABLE_VENV="no"
 VENV_NAME="tpl-venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERNAL_DIR="${SCRIPT_DIR}/external"
-BUILD_DIR="${SCRIPT_DIR}/build"
+BUILD_DIR="${TPL_BUILD_DIR:-${SCRIPT_DIR}/build}"
 
 # ==============================================================================
 # Helper functions
@@ -117,6 +117,10 @@ Options:
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
   --force                      Force rebuild of all components
   -h, --help                   Show this help message
+
+Environment:
+  TPL_BUILD_DIR                Build directory (default: ./build). Set it to keep
+                               separate builds (e.g. one per platform) from one checkout.
 
 Examples:
   ./install.sh --prefix=\$HOME/local
