@@ -652,7 +652,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         esac
 
         PK_ARGS="${PK_ARGS} -DENABLE_CUDA=ON ${K_ARCH_FLAG} -DCMAKE_CUDA_ARCHITECTURES=${FIRST_ARCH}"
-        # kokkos.CudaUVMSpace is exposed only if Kokkos itself was built with
+        # CudaUVMSpace views are bound only if Kokkos itself was built with
         # Kokkos_ENABLE_CUDA_UVM=ON: pykokkos-base reads KOKKOS_ENABLE_CUDA_UVM
         # from the installed KokkosCore_config.h (no pykokkos-base flag for it).
         print_info "Configuring PyKokkos-base for CUDA (Arch: ${FIRST_ARCH}, UVM: ${ENABLE_CUDA_UVM})"
@@ -687,7 +687,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     fi
 
     # 6. Verify kokkos module from pykokkos-base
-    
+
     if [ -n "${PYTHON_PREFIX}" ]; then
        _PY_VER=$(${PYTHON_EXEC} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
        _SITE_PKGS="${PYTHON_PREFIX}/lib/python${_PY_VER}/site-packages"
@@ -738,14 +738,15 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         print_info "Skipping pykokkos python interface (--skip-pykokkos)"
     fi
 
-    # 8. Sanity-check: CudaUVMSpace must be visible if Kokkos was built with UVM
+    # 8. Sanity-check: CudaUVMSpace views must be bound if Kokkos was built with UVM.
+    # kokkos.CudaUVMSpace is an enum value that always exists, so query availability.
     if [ "$ENABLE_CUDA" = "yes" ] && [ "$ENABLE_CUDA_UVM" = "yes" ]; then
-        if ! ${PYTHON_EXEC} -c "import kokkos; kokkos.CudaUVMSpace" 2>/dev/null; then
-            print_error "kokkos.CudaUVMSpace is not available after installation."
+        if ! ${PYTHON_EXEC} -c "import kokkos, sys; sys.exit(0 if kokkos.get_memory_space_available('CudaUVMSpace') else 1)" 2>/dev/null; then
+            print_error "CudaUVMSpace views are not available after installation."
             print_error "Kokkos was not built with -DKokkos_ENABLE_CUDA_UVM=ON."
             exit 1
         fi
-        print_info "Verified: kokkos.CudaUVMSpace is available"
+        print_info "Verified: CudaUVMSpace views are available"
     fi
 fi
 
@@ -780,6 +781,7 @@ CMAKE_ARGS=(
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}"
     -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}"
     -DADIOS2_USE_Kokkos=OFF
+    -DADIOS2_USE_Fortran=OFF
     -DBUILD_TESTING=OFF
     -DADIOS2_BUILD_EXAMPLES=OFF
 )
