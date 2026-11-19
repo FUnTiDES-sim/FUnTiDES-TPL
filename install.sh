@@ -30,7 +30,7 @@ ENABLE_VENV="no"
 VENV_NAME="tpl-venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERNAL_DIR="${SCRIPT_DIR}/external"
-BUILD_DIR="${SCRIPT_DIR}/build"
+BUILD_DIR="${TPL_BUILD_DIR:-${SCRIPT_DIR}/build}"
 
 # ==============================================================================
 # Helper functions
@@ -119,6 +119,10 @@ Options:
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
   --force                      Force rebuild of all components
   -h, --help                   Show this help message
+
+Environment:
+  TPL_BUILD_DIR                Build directory (default: ./build). Set it to keep
+                               separate builds (e.g. one per platform) from one checkout.
 
 Examples:
   ./install.sh --prefix=\$HOME/local
@@ -518,10 +522,13 @@ CMAKE_ARGS=(
 if [ "$ENABLE_CUDA" = "yes" ]; then
     # Map the numeric arch to the Kokkos keyword
     case "${CUDA_ARCH}" in
-        89) KOKKOS_ARCH_NAME="ADA89" ;;
+        70) KOKKOS_ARCH_NAME="VOLTA70" ;;
+        75) KOKKOS_ARCH_NAME="TURING75" ;;
         80) KOKKOS_ARCH_NAME="AMPERE80" ;;
         86) KOKKOS_ARCH_NAME="AMPERE86" ;;
-        70) KOKKOS_ARCH_NAME="VOLTA70" ;;
+        89) KOKKOS_ARCH_NAME="ADA89" ;;
+        90) KOKKOS_ARCH_NAME="HOPPER90" ;;
+        100) KOKKOS_ARCH_NAME="BLACKWELL100" ;;
         *)  KOKKOS_ARCH_NAME="${CUDA_ARCH}" ;; # Fallback
     esac
 
@@ -648,6 +655,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
             86) K_ARCH_FLAG="-DKokkos_ARCH_AMPERE86=ON" ;;
             89) K_ARCH_FLAG="-DKokkos_ARCH_ADA89=ON" ;;
             90) K_ARCH_FLAG="-DKokkos_ARCH_HOPPER90=ON" ;;
+            100) K_ARCH_FLAG="-DKokkos_ARCH_BLACKWELL100=ON" ;;
             *)  K_ARCH_FLAG="-DKokkos_ARCH_AMPERE80=ON" ;;
         esac
 
@@ -782,6 +790,8 @@ CMAKE_ARGS=(
     -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}"
     -DADIOS2_USE_Kokkos=OFF
     -DADIOS2_USE_Fortran=OFF
+    -DADIOS2_USE_ZeroMQ=OFF
+    -DADIOS2_USE_HDF5_VOL=OFF
     -DBUILD_TESTING=OFF
     -DADIOS2_BUILD_EXAMPLES=OFF
 )
