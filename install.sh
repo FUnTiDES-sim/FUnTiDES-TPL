@@ -633,6 +633,18 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     fi
     cd "${PYKOKKOS_BUILD_SRC}"
 
+    # Restrict the generated Kokkos::View bindings to what FUnTiDES uses:
+    # concrete views only (no DynRankView) and int32/int64/float32/float64.
+    # Applied to the build copy, the submodule stays untouched.
+    PK_VARIANTS_CMAKE="${PYKOKKOS_BUILD_SRC}/base/src/variants/CMakeLists.txt"
+    sed -i 's/^SET(_types .*/SET(_types              concrete)/' "${PK_VARIANTS_CMAKE}"
+    sed -i 's/^SET(_data_types .*/SET(_data_types         Int32 Int64 Float32 Float64)/' "${PK_VARIANTS_CMAKE}"
+    if ! grep -q '^SET(_types              concrete)$' "${PK_VARIANTS_CMAKE}" || \
+       ! grep -q '^SET(_data_types         Int32 Int64 Float32 Float64)$' "${PK_VARIANTS_CMAKE}"; then
+        print_error "Failed to restrict pykokkos-base view variants in ${PK_VARIANTS_CMAKE}"
+        exit 1
+    fi
+
     # 2. Configure Environment
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
 
@@ -649,7 +661,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     PK_ARGS="${PK_ARGS} -DKokkos_ROOT=${INSTALL_PREFIX}"
 
     # Feature flags (Must match how you built Kokkos)
-    PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=4"
+    PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=3"
 
     # 4. Handle CUDA Architecture
     if [ "$ENABLE_CUDA" = "yes" ]; then
