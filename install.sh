@@ -18,10 +18,10 @@ INSTALL_PREFIX="$(pwd)/install"
 ENABLE_CUDA="auto"
 ENABLE_CUDA_UVM="no"
 CUDA_ARCH="70;75;80;86;89"
-BUILD_MPI="no"
 BUILD_PYTHON="yes"
 BUILD_PYKOKKOS="yes"
 BUILD_TESTS="yes"
+BUILD_ADIOS2="no"
 NUM_JOBS=8
 PYKOKKOS_BUILD_THREADS=2
 FORCE_REBUILD="no"
@@ -108,10 +108,10 @@ Options:
   --disable-cuda               Disable CUDA support
   --enable-cuda-uvm            Build Kokkos with CUDA UVM as default memory space (default: no)
   --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
-  --enable-mpi                 Build Open MPI (default: no)
   --skip-python                Skip all Python dependencies (kokkos module and pykokkos)
   --skip-pykokkos              Skip pykokkos Python interface (keep kokkos module only)
   --skip-tests                 Skip test libraries (GTest, GBench)
+  --enable-adios2              Build ADIOS2 (default: no; needed only for FUNTIDES_ENABLE_ADIOS2=ON)
   --enable-venv                Use Python virtual environment (default: no)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
   --python-prefix=PATH         Python installation prefix (default: auto-detect)
@@ -126,7 +126,7 @@ Environment:
 
 Examples:
   ./install.sh --prefix=\$HOME/local
-  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80 --enable-venv --enable-mpi
+  ./install.sh --prefix=/opt/tpl --enable-cuda --cuda-arch=80 --enable-venv
   ./install.sh --skip-tests
 
 EOF
@@ -150,7 +150,7 @@ for arg in "$@"; do
             CUDA_ARCH="${arg#*=}"
             ;;
         --enable-mpi)
-            BUILD_MPI="yes"
+            print_warning "--enable-mpi is ignored: the TPL no longer builds MPI, use the system MPI"
             ;;
         --skip-python)
             BUILD_PYTHON="no"
@@ -161,6 +161,9 @@ for arg in "$@"; do
             ;;
         --skip-tests)
             BUILD_TESTS="no"
+            ;;
+        --enable-adios2)
+            BUILD_ADIOS2="yes"
             ;;
         --enable-venv)
             ENABLE_VENV="yes"
@@ -219,10 +222,10 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
     echo "CUDA architectures:   $CUDA_ARCH"
     echo "CUDA UVM:             $ENABLE_CUDA_UVM"
 fi
-echo "Build Open MPI:       $BUILD_MPI"
 echo "Build Python deps:    $BUILD_PYTHON"
 echo "Build pykokkos iface: $BUILD_PYKOKKOS"
 echo "Build test libs:      $BUILD_TESTS"
+echo "Build ADIOS2:         $BUILD_ADIOS2"
 echo "Parallel jobs:        $NUM_JOBS"
 echo ""
 
@@ -235,21 +238,6 @@ print_header "Checking Prerequisites"
 check_command cmake || exit 1
 check_command make || exit 1
 check_command g++ || check_command clang++ || exit 1
-
-if [ "$BUILD_MPI" = "yes" ]; then
-    check_command autoconf || { print_error "autoconf required for Open MPI"; exit 1; }
-    check_command automake || { print_error "automake required for Open MPI"; exit 1; }
-    check_command libtool || { print_error "libtool required for Open MPI"; exit 1; }
-    check_command perl || { print_error "perl required for Open MPI autogen.pl"; exit 1; }
-
-    # Check for optional but commonly needed tools
-    if ! check_command flex; then
-        print_warning "flex not found - may be needed for Open MPI build"
-    fi
-    if ! check_command bison; then
-        print_warning "bison not found - may be needed for Open MPI build"
-    fi
-fi
 
 if [ "$BUILD_PYTHON" = "yes" ]; then
     check_command python3 || { print_error "python3 required for Python dependencies"; exit 1; }
@@ -334,16 +322,14 @@ check_submodule() {
 # Check required submodules
 check_submodule "Kokkos" "${EXTERNAL_DIR}/kokkos" "CMakeLists.txt"
 
-if [ "$BUILD_MPI" = "yes" ]; then
-    check_submodule "Open MPI" "${EXTERNAL_DIR}/openmpi" "autogen.pl"
-fi
-
 if [ "$BUILD_PYTHON" = "yes" ]; then
     check_submodule "pybind11" "${EXTERNAL_DIR}/pybind11" "CMakeLists.txt"
     check_submodule "pykokkos" "${EXTERNAL_DIR}/pykokkos" "setup.py"
 fi
 
-check_submodule "ADIOS2" "${EXTERNAL_DIR}/adios2" "CMakeLists.txt"
+if [ "$BUILD_ADIOS2" = "yes" ]; then
+    check_submodule "ADIOS2" "${EXTERNAL_DIR}/adios2" "CMakeLists.txt"
+fi
 
 if [ "$BUILD_TESTS" = "yes" ]; then
     check_submodule "GoogleTest" "${EXTERNAL_DIR}/googletest" "CMakeLists.txt"
@@ -362,124 +348,6 @@ mkdir -p "${INSTALL_PREFIX}"
 # Absolute paths
 INSTALL_PREFIX=$(cd "${INSTALL_PREFIX}" && pwd)
 BUILD_DIR=$(cd "${BUILD_DIR}" && pwd)
-
-# ==============================================================================
-# Build Open MPI (if requested)
-# ==============================================================================
-
-if [ "$BUILD_MPI" = "yes" ]; then
-    print_header "Building Open MPI"
-
-    # Check if already installed and whether to rebuild
-    REBUILD_OMPI="no"
-    if is_installed "Open MPI" "bin/mpirun"; then
-        print_info "Open MPI already installed at ${INSTALL_PREFIX}/bin/mpirun"
-        if ask_rebuild "Open MPI"; then
-            REBUILD_OMPI="yes"
-            rm -rf "${BUILD_DIR}/openmpi"
-        else
-            print_info "Skipping Open MPI build"
-            # Add to PATH for subsequent builds
-            export PATH="${INSTALL_PREFIX}/bin:$PATH"
-            export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH"
-        fi
-    else
-        REBUILD_OMPI="yes"
-    fi
-
-    if [ "$REBUILD_OMPI" = "yes" ]; then
-
-    # Check if we need to run autogen (git checkout or no configure)
-    # Submodules have .git as a file, not directory
-    NEED_AUTOGEN=false
-
-    if [ ! -f "${EXTERNAL_DIR}/openmpi/configure" ]; then
-        NEED_AUTOGEN=true
-    elif [ -e "${EXTERNAL_DIR}/openmpi/.git" ]; then
-        # .git exists (either file for submodule or dir for regular clone)
-        NEED_AUTOGEN=true
-    fi
-
-    if [ "$NEED_AUTOGEN" = "true" ]; then
-        print_info "Generating configure script from git sources..."
-        cd "${EXTERNAL_DIR}/openmpi"
-
-        # Check which branch/version we're on
-        if command -v git &> /dev/null && [ -e ".git" ]; then
-            OMPI_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-            OMPI_VERSION=$(cat VERSION 2>/dev/null | head -1 || echo "unknown")
-            print_info "Open MPI branch: ${OMPI_BRANCH}"
-            print_info "Open MPI version: ${OMPI_VERSION}"
-
-            # Warn if not on v4.1.x
-            if [[ ! "$OMPI_BRANCH" =~ ^v4\.1 ]] && [[ ! "$OMPI_VERSION" =~ ^4\.1 ]]; then
-                print_warning "Not on v4.1.x branch - you may encounter dependency issues"
-                print_warning "Recommended: git checkout v4.1.x"
-            fi
-        fi
-
-        # Clean any previous autogen artifacts
-        if [ -f "Makefile" ]; then
-            make distclean 2>/dev/null || true
-        fi
-
-        # Remove old configure to force regeneration
-        rm -f configure
-
-        # Run autogen
-        if [ -f "autogen.pl" ]; then
-            print_info "Running autogen.pl (this takes a few minutes)..."
-            ./autogen.pl
-        else
-            print_error "Cannot find autogen.pl. Open MPI source may be incomplete."
-            print_error "Try: git submodule update --init --recursive"
-            exit 1
-        fi
-    fi
-
-    MPI_BUILD_DIR="${BUILD_DIR}/openmpi"
-    mkdir -p "${MPI_BUILD_DIR}"
-    cd "${MPI_BUILD_DIR}"
-
-    CONFIGURE_ARGS="--prefix=${INSTALL_PREFIX}"
-
-    # Check Open MPI version to determine if we need internal PMIx
-    OMPI_VERSION=""
-    if [ -f "${EXTERNAL_DIR}/openmpi/VERSION" ]; then
-        OMPI_VERSION=$(cat "${EXTERNAL_DIR}/openmpi/VERSION" | head -1)
-        print_info "Detected Open MPI version: ${OMPI_VERSION}"
-    fi
-
-    # For v5.0+ we need internal PMIx to avoid system version conflicts
-    if [[ "$OMPI_VERSION" =~ ^5\. ]] || [[ "$OMPI_VERSION" =~ ^6\. ]]; then
-        print_warning "Open MPI v5.0+ detected - using internal PMIx/PRRTE"
-        print_warning "For better stability, consider: cd external/openmpi && git checkout v4.1.x"
-        CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-pmix=internal --with-prrte=internal"
-    fi
-
-    if [ "$ENABLE_CUDA" = "yes" ]; then
-        CONFIGURE_ARGS="${CONFIGURE_ARGS} --with-cuda=${CUDA_PATH}"
-        print_info "Enabling CUDA-aware MPI (--with-cuda=${CUDA_PATH})"
-    fi
-
-    print_info "Configuring Open MPI..."
-    ${EXTERNAL_DIR}/openmpi/configure ${CONFIGURE_ARGS}
-
-    print_info "Building Open MPI (this may take a while)..."
-    make -j${NUM_JOBS}
-
-    print_info "Installing Open MPI..."
-    make install
-
-    # Add to PATH for subsequent builds
-    export PATH="${INSTALL_PREFIX}/bin:$PATH"
-    export LD_LIBRARY_PATH="${INSTALL_PREFIX}/lib:$LD_LIBRARY_PATH"
-
-    print_info "Open MPI installed successfully"
-    fi  # End of rebuild check
-else
-    print_info "Skipping Open MPI build (using system MPI or disabled)"
-fi
 
 # ==============================================================================
 # Build Kokkos
@@ -772,6 +640,7 @@ fi
 # Build ADIOS2
 # ==============================================================================
 
+if [ "$BUILD_ADIOS2" = "yes" ]; then
 print_header "Building ADIOS2"
 
 # Check if already installed and whether to rebuild
@@ -804,12 +673,10 @@ CMAKE_ARGS=(
     -DADIOS2_USE_HDF5_VOL=OFF
     -DBUILD_TESTING=OFF
     -DADIOS2_BUILD_EXAMPLES=OFF
+    # FUnTiDES only uses the serial ADIOS2 API (one file per rank), so ADIOS2
+    # never links MPI and cannot pick an MPI different from the application's.
+    -DADIOS2_USE_MPI=OFF
 )
-
-if [ "$BUILD_MPI" = "yes" ] || command -v mpirun &> /dev/null; then
-    CMAKE_ARGS+=(-DADIOS2_USE_MPI=ON)
-    print_info "Enabling MPI support"
-fi
 
 # Note: ADIOS2_USE_CUDA is incompatible with ADIOS2_USE_Kokkos
 # When using Kokkos, CUDA support comes through Kokkos, not directly
@@ -837,6 +704,9 @@ cmake --install .
 
 print_info "ADIOS2 installed successfully"
 fi  # End of ADIOS2 rebuild check
+else
+    print_info "Skipping ADIOS2 build (use --enable-adios2 to build it)"
+fi  # End of BUILD_ADIOS2 check
 
 # ==============================================================================
 # Build GoogleTest
@@ -1007,12 +877,6 @@ Libraries installed:
   - Kokkos $([ "$ENABLE_CUDA" = "yes" ] && echo "(with CUDA)" || echo "(CPU only)")
 EOF
 
-if [ "$BUILD_MPI" = "yes" ] && [ -f "${INSTALL_PREFIX}/bin/mpirun" ]; then
-    echo "  - Open MPI $([ "$ENABLE_CUDA" = "yes" ] && echo "(CUDA-aware)" || echo "")"
-elif [ "$BUILD_MPI" = "no" ]; then
-    echo "  - MPI (using system MPI)"
-fi
-
 if [ "$BUILD_PYTHON" = "yes" ]; then
     if [ -f "${INSTALL_PREFIX}/lib/cmake/pybind11/pybind11Config.cmake" ]; then
         echo "  - pybind11"
@@ -1039,7 +903,9 @@ elif [ "$BUILD_PYTHON" = "no" ]; then
     echo "  - Python dependencies (skipped)"
 fi
 
-echo "  - ADIOS2"
+if [ "$BUILD_ADIOS2" = "yes" ]; then
+    echo "  - ADIOS2"
+fi
 
 if [ "$BUILD_TESTS" = "yes" ]; then
     if [ -f "${INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake" ]; then
