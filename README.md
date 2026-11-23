@@ -5,22 +5,21 @@ This repository contains all dependencies for the main project as git submodules
 ## Dependencies Included
 
 - **Kokkos 4.7** - Performance portability programming model
-- **Open MPI 4.1.x** - CUDA-aware MPI implementation (stable, production-ready)
 - **pykokkos** - Python bindings for Kokkos (includes pykokkos-base). With `--restrict-pykokkos-base`,
   only the views used by FUnTiDES are bound, which makes the build much shorter: `Kokkos::View` up to
   rank 3, int32/int64/float32/float64, LayoutLeft/LayoutRight. `Kokkos::DynRankView` and other dtypes
   are then not available from Python.
 - **pybind11** - C++/Python binding library
-- **ADIOS2** - I/O framework
+- **ADIOS2** - I/O framework (optional, `--enable-adios2`)
 - **GoogleTest** - C++ testing framework
 - **Google Benchmark** - C++ microbenchmarking library
 
-### Open MPI Version Notes
+### MPI
 
-The repository defaults to Open MPI v4.1.x for maximum stability:
-- **v4.1.x**: Most stable, production-ready, fewer dependencies ✅ **RECOMMENDED & DEFAULT**
-- **v5.0.x**: Current stable, requires newer PMIx, more complex build
-- **main/v6.x**: Development branch, removed C++ bindings (not recommended)
+MPI is not provided: use the MPI of your machine (system package or module).
+Building MPI here would risk a mismatch with the machine's MPI stack. ADIOS2,
+when enabled, is built without MPI (FUnTiDES uses its serial API only), so the
+TPL never links against any MPI.
 
 ## Quick Start
 
@@ -55,9 +54,9 @@ Options:
   --enable-cuda                Enable CUDA support (default: auto-detect)
   --disable-cuda               Disable CUDA support
   --cuda-arch=ARCH             CUDA architecture (default: 70;75;80;86;89)
-  --enable-mpi                 Build Open MPI (default: no)
   --skip-python                Skip Python dependencies (pykokkos)
   --skip-tests                 Skip test libraries (GTest, GBench)
+  --enable-adios2              Build ADIOS2 (default: no; needed only for FUNTIDES_ENABLE_ADIOS2=ON)
   --enable-venv                Use Python virtual environment (default: no)
   --venv-name=NAME             Virtual environment name (default: tpl-venv)
   --jobs=N                     Number of parallel jobs (default: 8)
@@ -80,7 +79,7 @@ Example:
 # First install
 ./install.sh --prefix=$HOME/local --enable-cuda
 
-# Later, add tests (Kokkos and MPI will be skipped)
+# Later, rerun (already-installed components are skipped)
 ./install.sh --prefix=$HOME/local --enable-cuda
 
 # Force complete rebuild
@@ -99,9 +98,9 @@ Example:
 ./install.sh --prefix=$HOME/local --enable-cuda --cuda-arch=80
 ```
 
-**Using system MPI, skip tests:**
+**Skip tests, build ADIOS2:**
 ```bash
-./install.sh --prefix=$HOME/local --disable-mpi --skip-tests
+./install.sh --prefix=$HOME/local --skip-tests --enable-adios2
 ```
 
 **Build without Python dependencies:**
@@ -119,7 +118,6 @@ git submodule update --init --recursive external/*
 
 # Or initialize specific submodules
 git submodule update --init external/kokkos
-git submodule update --init external/openmpi
 git submodule update --init external/pykokkos
 git submodule update --init external/pybind11
 git submodule update --init external/adios2
@@ -137,7 +135,6 @@ mkdir -p external
 
 # Add submodules
 git submodule add -b 4.7.00 https://github.com/kokkos/kokkos.git external/kokkos
-git submodule add -b v4.1.x https://github.com/open-mpi/ompi.git external/openmpi
 git submodule add https://github.com/kokkos/pykokkos.git external/pykokkos
 git submodule add -b v2.13.0 https://github.com/pybind/pybind11.git external/pybind11
 git submodule add -b master https://github.com/ornladios/ADIOS2.git external/adios2
@@ -166,7 +163,7 @@ source setup_tpl_env.sh /path/to/install
 ```
 
 This sets:
-- `PATH` - for executables (mpirun, etc.)
+- `PATH` - for executables
 - `LD_LIBRARY_PATH` - for shared libraries
 - `CMAKE_PREFIX_PATH` - for CMake to find packages
 - `PKG_CONFIG_PATH` - for pkg-config
@@ -201,10 +198,6 @@ export PATH=/path/to/install/bin:$PATH
 Check that everything is working:
 
 ```bash
-# Check MPI
-which mpirun
-mpirun --version
-
 # Check libraries
 ls $CMAKE_PREFIX_PATH/lib/cmake/
 
@@ -222,9 +215,9 @@ set(CMAKE_PREFIX_PATH "/path/to/install/prefix")
 
 # Find packages
 find_package(Kokkos REQUIRED)
-find_package(MPI REQUIRED)
+find_package(MPI REQUIRED)          # system MPI, not provided by the TPL
 find_package(pybind11 REQUIRED)
-find_package(ADIOS2 REQUIRED)
+find_package(ADIOS2 REQUIRED)       # only if built with --enable-adios2
 find_package(GTest REQUIRED)
 find_package(benchmark REQUIRED)
 
@@ -252,84 +245,11 @@ cmake ..  # No need to specify CMAKE_PREFIX_PATH
 - C++17 compatible compiler (GCC 7+, Clang 5+)
 - Python 3.7+ with pip (for pykokkos)
 - CUDA Toolkit 11.0+ (optional, for GPU support)
-- For building Open MPI from git:
-  - autoconf, automake, libtool
-  - perl (for autogen.pl)
-  - flex, bison (recommended)
+- MPI from the system (optional, only for MPI builds of FUnTiDES)
 
 **Note:** The install script automatically installs Python build dependencies (scikit-build, cmake, ninja) when building pykokkos.
 
 ## Troubleshooting
-
-### CUDA-aware MPI not working
-Make sure CUDA toolkit is in your PATH:
-```bash
-export PATH=/usr/local/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-```
-
-### Open MPI configure script not found
-The script automatically runs `autogen.pl` to generate the configure script. If this fails, ensure you have the required tools:
-```bash
-# Ubuntu/Debian
-sudo apt-get install autoconf automake libtool perl flex bison
-
-# RHEL/CentOS/Rocky
-sudo yum install autoconf automake libtool perl flex bison
-
-# Or manually generate:
-cd external/openmpi
-./autogen.pl
-```
-
-### Open MPI configure script errors (syntax errors, OAC_PUSH_PREFIX)
-If you see syntax errors in the configure script like "OAC_PUSH_PREFIX" or "unexpected token", the configure script is corrupted. Clean and regenerate:
-
-```bash
-cd external/openmpi
-make distclean 2>/dev/null || true
-rm -f configure
-./autogen.pl
-cd ../..
-rm -rf build/openmpi
-./install.sh --prefix=... --enable-cuda
-```
-
-The updated install.sh now does this automatically when building from git.
-
-### Open MPI build errors (autotools/m4 macros)
-If you see errors about m4 macros, AC_MSG_WARN, or OPAL_BUILD_DOCS during the build, you may have a newer development branch. The repository now defaults to v4.1.x which is stable. If you need to switch:
-
-```bash
-cd external/openmpi
-git fetch origin
-git checkout v4.1.x  # Default, most stable
-cd ../..
-rm -rf build/openmpi
-./install.sh --prefix=... --enable-cuda
-```
-
-### Open MPI PMIx version error (v5.0.x only)
-If using v5.0.x and you see "PRRTE requires PMIx v0x00060001 or above", switch to v4.1.x:
-
-```bash
-cd external/openmpi
-git fetch origin
-git checkout v4.1.x
-git pull origin v4.1.x
-cd ../..
-rm -rf build/openmpi
-./install.sh --prefix=... --enable-cuda
-```
-
-**Check your current version:**
-```bash
-cd external/openmpi
-git branch  # Shows current branch
-cat VERSION # Shows version number
-```
-
-**IMPORTANT:** If you see version 5.x or 6.x, you MUST switch to v4.1.x as shown above. The .gitmodules default is v4.1.x, but if you cloned before the update, you may still be on an older branch.
 
 ### pykokkos installation fails
 The install script now automatically installs build dependencies (scikit-build, cmake, ninja) and sets CUDA architecture flags.
@@ -393,7 +313,7 @@ After a successful build, your installation directory will contain:
 
 ```
 install/
-├── bin/           # Executables (mpirun, etc.)
+├── bin/           # Executables
 ├── include/       # Header files
 ├── lib/           # Libraries and CMake config files
 │   ├── cmake/
