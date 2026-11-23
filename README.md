@@ -5,7 +5,10 @@ This repository contains all dependencies for the main project as git submodules
 ## Dependencies Included
 
 - **Kokkos 4.7** - Performance portability programming model
-- **pykokkos** - Python bindings for Kokkos (includes pykokkos-base)
+- **pykokkos** - Python bindings for Kokkos (includes pykokkos-base). With `--restrict-pykokkos-base`,
+  only the views used by FUnTiDES are bound, which makes the build much shorter: `Kokkos::View` up to
+  rank 3, int32/int64/float32/float64, LayoutLeft/LayoutRight. `Kokkos::DynRankView` and other dtypes
+  are then not available from Python.
 - **pybind11** - C++/Python binding library
 - **ADIOS2** - I/O framework (optional, `--enable-adios2`)
 - **GoogleTest** - C++ testing framework
@@ -63,6 +66,7 @@ Options:
   --python-prefix=PATH         Python installation prefix (default: auto-detect)
   --jobs=N                     Number of parallel jobs (default: 8)
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
+  --restrict-pykokkos-base     Bind only the views used by FUnTiDES in pykokkos-base (default: no)
   --force                      Force rebuild of all components
   -h, --help                   Show this help message
 ```
