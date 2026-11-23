@@ -53,7 +53,7 @@ _tpl_prepend() {
     esac
 }
 
-# Executables (mpirun, mpicc, etc.)
+# Executables
 _tpl_prepend PATH "${TPL_PREFIX}/bin"
 
 # Shared libraries
@@ -101,13 +101,6 @@ echo ""
 echo "Available tools:"
 
 # Check what's available
-if command -v mpirun &> /dev/null; then
-    MPIRUN_PATH=$(which mpirun)
-    if [[ "$MPIRUN_PATH" == "${TPL_PREFIX}"* ]]; then
-        echo "  ✓ MPI              ($(mpirun --version 2>&1 | head -1))"
-    fi
-fi
-
 if [ -f "${TPL_PREFIX}/lib/cmake/Kokkos/KokkosConfig.cmake" ]; then
     echo "  ✓ Kokkos"
 fi
