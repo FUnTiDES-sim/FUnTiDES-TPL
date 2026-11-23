@@ -24,6 +24,7 @@ BUILD_TESTS="yes"
 BUILD_ADIOS2="no"
 NUM_JOBS=8
 PYKOKKOS_BUILD_THREADS=2
+RESTRICT_PYKOKKOS_BASE="no"
 FORCE_REBUILD="no"
 PYTHON_PREFIX=""
 ENABLE_VENV="no"
@@ -117,6 +118,9 @@ Options:
   --python-prefix=PATH         Python installation prefix (default: auto-detect)
   --jobs=N                     Number of parallel jobs (default: 8)
   --pykokkos-build-threads=N   Parallel threads for PyKokkos build, memory intensive (default: 2)
+  --restrict-pykokkos-base     Bind only the views used by FUnTiDES in pykokkos-base
+                               (Kokkos::View up to rank 3, int32/int64/float32/float64,
+                               no DynRankView). Much shorter build (default: no)
   --force                      Force rebuild of all components
   -h, --help                   Show this help message
 
@@ -180,6 +184,9 @@ for arg in "$@"; do
         --pykokkos-build-threads=*)
             PYKOKKOS_BUILD_THREADS="${arg#*=}"
             ;;
+        --restrict-pykokkos-base)
+            RESTRICT_PYKOKKOS_BASE="yes"
+            ;;
         --force)
             FORCE_REBUILD="yes"
             ;;
@@ -224,6 +231,7 @@ if [ "$ENABLE_CUDA" = "yes" ]; then
 fi
 echo "Build Python deps:    $BUILD_PYTHON"
 echo "Build pykokkos iface: $BUILD_PYKOKKOS"
+echo "Restrict pykokkos-base: $RESTRICT_PYKOKKOS_BASE"
 echo "Build test libs:      $BUILD_TESTS"
 echo "Build ADIOS2:         $BUILD_ADIOS2"
 echo "Parallel jobs:        $NUM_JOBS"
@@ -501,6 +509,27 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     fi
     cd "${PYKOKKOS_BUILD_SRC}"
 
+    # With --restrict-pykokkos-base, restrict the generated Kokkos::View bindings
+    # to what FUnTiDES uses: concrete views only (no DynRankView), ranks up to 3
+    # and int32/int64/float32/float64. Applied to the build copy, the submodule
+    # stays untouched.
+    # The variants file is always restored from the submodule first, so that a
+    # previous restricted build in the same build dir does not leak into this one.
+    PK_VARIANTS_CMAKE="${PYKOKKOS_BUILD_SRC}/base/src/variants/CMakeLists.txt"
+    cp "${EXTERNAL_DIR}/pykokkos/base/src/variants/CMakeLists.txt" "${PK_VARIANTS_CMAKE}"
+    PK_VIEW_RANKS=4
+    if [ "$RESTRICT_PYKOKKOS_BASE" = "yes" ]; then
+        print_info "Restricting pykokkos-base view bindings to FUnTiDES needs"
+        PK_VIEW_RANKS=3
+        sed -i 's/^SET(_types .*/SET(_types              concrete)/' "${PK_VARIANTS_CMAKE}"
+        sed -i 's/^SET(_data_types .*/SET(_data_types         Int32 Int64 Float32 Float64)/' "${PK_VARIANTS_CMAKE}"
+        if ! grep -q '^SET(_types              concrete)$' "${PK_VARIANTS_CMAKE}" || \
+           ! grep -q '^SET(_data_types         Int32 Int64 Float32 Float64)$' "${PK_VARIANTS_CMAKE}"; then
+            print_error "Failed to restrict pykokkos-base view variants in ${PK_VARIANTS_CMAKE}"
+            exit 1
+        fi
+    fi
+
     # 2. Configure Environment
     export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}"
 
@@ -517,7 +546,7 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
     PK_ARGS="${PK_ARGS} -DKokkos_ROOT=${INSTALL_PREFIX}"
 
     # Feature flags (Must match how you built Kokkos)
-    PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=4"
+    PK_ARGS="${PK_ARGS} -DENABLE_LAYOUTS=ON -DENABLE_VIEW_RANKS=${PK_VIEW_RANKS}"
 
     # 4. Handle CUDA Architecture
     if [ "$ENABLE_CUDA" = "yes" ]; then
