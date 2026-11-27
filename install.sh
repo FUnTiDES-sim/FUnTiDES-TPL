@@ -560,20 +560,21 @@ if [ "$BUILD_PYTHON" = "yes" ]; then
         fi
     fi
 
-    # 1. Install Build Dependencies
+    # 1. Install Build Dependencies (numpy: imported by the kokkos module at load time,
+    #    but not declared by pykokkos-base)
     print_info "Installing build dependencies..."
     if [ "$ENABLE_VENV" != "yes" ]; then
-        if ! ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf; then
+        if ! ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf numpy; then
             print_error "Failed to install Python build dependencies for pykokkos"
             print_error "Tip: rerun manually to inspect full pip diagnostics"
-            print_error "Command: ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf"
+            print_error "Command: ${PYTHON_EXEC} -m pip install --break-system-packages scikit-build cmake ninja patchelf numpy"
             exit 1
         fi
     else
-        if ! ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf; then
+        if ! ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf numpy; then
             print_error "Failed to install Python build dependencies for pykokkos"
             print_error "Tip: rerun manually to inspect full pip diagnostics"
-            print_error "Command: ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf"
+            print_error "Command: ${PYTHON_EXEC} -m pip install scikit-build cmake ninja patchelf numpy"
             exit 1
         fi
     fi
